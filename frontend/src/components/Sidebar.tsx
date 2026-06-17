@@ -1,4 +1,4 @@
-import React, { useState, ComponentType } from "react";
+import React, { useState, ComponentType, MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Hash, AtSign, MapPin, Pencil, Trash2, X, Check } from "lucide-react";
 import api from "@/lib/api";
@@ -7,26 +7,32 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import type { Tag, Person, LocationItem } from "@/types";
+import { useFilter } from "@/contexts/FilterContext";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+type RowFilterType = "tag" | "person" | "location";
+
 interface EditableRowProps {
   icon: ComponentType<{ className?: string; strokeWidth?: number }>;
   label: string;
   to: string;
+  filterType: RowFilterType;
+  filterValue: string;
   onRename: (newName: string) => Promise<void>;
   onDelete: () => Promise<void>;
   accentClass: string;
   testid: string;
 }
 
-function EditableRow({ icon: Icon, label, to, onRename, onDelete, accentClass, testid }: EditableRowProps) {
+function EditableRow({ icon: Icon, label, to, filterType, filterValue, onRename, onDelete, accentClass, testid }: EditableRowProps) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(label);
   const nav = useNavigate();
+  const { tryAddFilter } = useFilter();
 
   async function save() {
     const trimmed = val.trim();
@@ -38,6 +44,11 @@ function EditableRow({ icon: Icon, label, to, onRename, onDelete, accentClass, t
     } catch (e: any) {
       toast.error(e?.response?.data?.detail || "Hata");
     }
+  }
+
+  function onClickRow(e: ReactMouseEvent) {
+    if (tryAddFilter(filterType, filterValue, e)) return; // ctrl+click → add filter
+    nav(to);
   }
 
   if (editing) {
@@ -61,7 +72,8 @@ function EditableRow({ icon: Icon, label, to, onRename, onDelete, accentClass, t
     <div className="group flex items-center justify-between px-2 py-1 rounded-md hover:bg-accent/50 transition-colors" data-testid={`${testid}-row`}>
       <button
         className="flex items-center gap-1.5 text-sm font-mono truncate text-left flex-1"
-        onClick={() => nav(to)}
+        onClick={onClickRow}
+        title="Tıkla: tek filtre · Ctrl/Cmd+tıkla: filtreye ekle"
       >
         <Icon className={`w-3.5 h-3.5 ${accentClass}`} strokeWidth={1.5} />
         <span className="truncate">{label}</span>
@@ -125,6 +137,8 @@ export default function Sidebar({ tags, people, locations, onChange }: SidebarPr
                 accentClass="text-[hsl(var(--accent-tag))]"
                 label={t.name}
                 to={`/tag/${encodeURIComponent(t.name)}`}
+                filterType="tag"
+                filterValue={t.name}
                 onRename={async (n) => { await api.put(`/tags/${t.tag_id}`, { name: n }); onChange(); }}
                 onDelete={async () => { await api.delete(`/tags/${t.tag_id}`); toast.success("Etiket silindi"); onChange(); }}
                 testid={`tag-${t.name}`}
@@ -143,6 +157,8 @@ export default function Sidebar({ tags, people, locations, onChange }: SidebarPr
                 accentClass="text-[hsl(var(--accent-mention))]"
                 label={p.name}
                 to={`/person/${encodeURIComponent(p.name)}`}
+                filterType="person"
+                filterValue={p.name}
                 onRename={async (n) => { await api.put(`/people/${p.person_id}`, { name: n }); onChange(); }}
                 onDelete={async () => { await api.delete(`/people/${p.person_id}`); toast.success("Kişi silindi"); onChange(); }}
                 testid={`person-${p.name}`}
@@ -161,6 +177,8 @@ export default function Sidebar({ tags, people, locations, onChange }: SidebarPr
                 accentClass="text-muted-foreground"
                 label={l.name}
                 to={`/location/${l.location_id}`}
+                filterType="location"
+                filterValue={l.location_id}
                 onRename={async (n) => { await api.put(`/locations/${l.location_id}`, { name: n }); onChange(); }}
                 onDelete={async () => { await api.delete(`/locations/${l.location_id}`); toast.success("Konum silindi"); onChange(); }}
                 testid={`location-${l.name}`}

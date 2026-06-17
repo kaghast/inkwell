@@ -2,9 +2,36 @@ import React, { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link } from "react-router-dom";
+import { useFilter } from "@/contexts/FilterContext";
 
 const TAG_RE = /(^|\s)#([\w\-_ğüşıöçĞÜŞİÖÇ]+)/gu;
 const MEN_RE = /(^|\s)@([\w\-_ğüşıöçĞÜŞİÖÇ]+)/gu;
+
+function TagLink({ name }: { name: string }) {
+  const { tryAddFilter } = useFilter();
+  return (
+    <Link
+      to={`/tag/${encodeURIComponent(name)}`}
+      className="inline-tag"
+      onClick={(e) => { if (tryAddFilter("tag", name, e)) e.preventDefault(); }}
+    >
+      #{name}
+    </Link>
+  );
+}
+
+function MentionLink({ name }: { name: string }) {
+  const { tryAddFilter } = useFilter();
+  return (
+    <Link
+      to={`/person/${encodeURIComponent(name)}`}
+      className="inline-mention"
+      onClick={(e) => { if (tryAddFilter("person", name, e)) e.preventDefault(); }}
+    >
+      @{name}
+    </Link>
+  );
+}
 
 function transformChildren(children: ReactNode): ReactNode[] {
   const arr = Array.isArray(children) ? children : [children];
@@ -24,11 +51,7 @@ function transformChildren(children: ReactNode): ReactNode[] {
       while ((m = re.exec(p)) !== null) {
         if (m.index + m[1].length > last) parts.push(p.slice(last, m.index + m[1].length));
         const tagName = m[2].toLowerCase();
-        parts.push(
-          <Link key={`t-${idx}-${i}-${m.index}`} to={`/tag/${encodeURIComponent(tagName)}`} className="inline-tag">
-            #{tagName}
-          </Link>
-        );
+        parts.push(<TagLink key={`t-${idx}-${i}-${m.index}`} name={tagName} />);
         last = m.index + m[1].length + 1 + m[2].length;
       }
       if (last < p.length) parts.push(p.slice(last));
@@ -43,11 +66,7 @@ function transformChildren(children: ReactNode): ReactNode[] {
       while ((m = re.exec(p)) !== null) {
         if (m.index + m[1].length > last) parts.push(p.slice(last, m.index + m[1].length));
         const name = m[2].toLowerCase();
-        parts.push(
-          <Link key={`m-${idx}-${i}-${m.index}`} to={`/person/${encodeURIComponent(name)}`} className="inline-mention">
-            @{name}
-          </Link>
-        );
+        parts.push(<MentionLink key={`m-${idx}-${i}-${m.index}`} name={name} />);
         last = m.index + m[1].length + 1 + m[2].length;
       }
       if (last < p.length) parts.push(p.slice(last));

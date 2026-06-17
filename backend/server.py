@@ -14,7 +14,7 @@ import httpx
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
@@ -430,18 +430,39 @@ async def list_notes(
     tag: Optional[str] = None,
     person: Optional[str] = None,
     location_id: Optional[str] = None,
+    tags: List[str] = Query(default_factory=list),
+    people: List[str] = Query(default_factory=list),
+    location_ids: List[str] = Query(default_factory=list),
+    q: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
-    q: dict = {"user_id": user["user_id"]}
+    qf: dict = {"user_id": user["user_id"]}
     if date:
-        q["date"] = date
-    if tag:
-        q["tags"] = tag.lower()
-    if person:
-        q["people"] = person.lower()
-    if location_id:
-        q["location_id"] = location_id
-    items = await db.notes.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+        qf["date"] = date
+
+    all_tags = list({t.lower() for t in tags} | ({tag.lower()} if tag else set()))
+    if len(all_tags) == 1:
+        qf["tags"] = all_tags[0]
+    elif len(all_tags) > 1:
+        qf["tags"] = {"$all": all_tags}
+
+    all_people = list({p.lower() for p in people} | ({person.lower()} if person else set()))
+    if len(all_people) == 1:
+        qf["people"] = all_people[0]
+    elif len(all_people) > 1:
+        qf["people"] = {"$all": all_people}
+
+    all_locs = list({l for l in location_ids} | ({location_id} if location_id else set()))
+    if len(all_locs) == 1:
+        qf["location_id"] = all_locs[0]
+    elif len(all_locs) > 1:
+        qf["location_id"] = {"$in": all_locs}
+
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        qf["$or"] = [{"title": rx}, {"content": rx}]
+
+    items = await db.notes.find(qf, {"_id": 0}).sort("created_at", -1).to_list(500)
     return items
 
 

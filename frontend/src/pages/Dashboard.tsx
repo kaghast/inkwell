@@ -6,14 +6,25 @@ import CalendarPanel from "@/components/CalendarPanel";
 import NoteCard from "@/components/NoteCard";
 import NoteComposer from "@/components/NoteComposer";
 import TopBar from "@/components/TopBar";
+import SearchBar, { FilterChip } from "@/components/SearchBar";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Hash, AtSign, MapPin } from "lucide-react";
+import { FilterProvider, FilterType } from "@/contexts/FilterContext";
+import { toast } from "sonner";
 import type { Note, Tag, Person, LocationItem, CalendarCounts, DashboardMode } from "@/types";
 
 function todayIso(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
+
+interface ExtraFilters {
+  q: string;
+  tags: string[];
+  people: string[];
+  locationIds: string[];
+}
+const emptyExtras: ExtraFilters = { q: "", tags: [], people: [], locationIds: [] };
 
 interface Props {
   mode?: DashboardMode;
@@ -28,6 +39,10 @@ export default function Dashboard({ mode = "day" }: Props) {
   const [people, setPeople] = useState<Person[]>([]);
   const [locations, setLocations] = useState<LocationItem[]>([]);
   const [calCounts, setCalCounts] = useState<CalendarCounts>({});
+  const [extras, setExtras] = useState<ExtraFilters>(emptyExtras);
+
+  // Reset extras when navigating between modes/routes so chips don't leak across pages.
+  useEffect(() => { setExtras(emptyExtras); }, [mode, params.name, params.id]);
 
   const todayInit = todayIso();
   const initDate = params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : todayInit;
@@ -61,14 +76,27 @@ export default function Dashboard({ mode = "day" }: Props) {
   }, []);
 
   const fetchNotes = useCallback(async () => {
-    const q: Record<string, string> = {};
-    if (mode === "day") q.date = selectedDate;
-    if (mode === "tag" && params.name) q.tag = params.name;
-    if (mode === "person" && params.name) q.person = params.name;
-    if (mode === "location" && params.id) q.location_id = params.id;
-    const { data } = await api.get<Note[]>("/notes", { params: q });
+    const queryParams: Record<string, any> = {};
+    if (mode === "day") queryParams.date = selectedDate;
+
+    // Combine route-based primary filter with extras (route filter is always included)
+    const allTags = [...extras.tags];
+    if (mode === "tag" && params.name) allTags.unshift(params.name);
+    if (allTags.length > 0) queryParams.tags = allTags;
+
+    const allPeople = [...extras.people];
+    if (mode === "person" && params.name) allPeople.unshift(params.name);
+    if (allPeople.length > 0) queryParams.people = allPeople;
+
+    const allLocs = [...extras.locationIds];
+    if (mode === "location" && params.id) allLocs.unshift(params.id);
+    if (allLocs.length > 0) queryParams.location_ids = allLocs;
+
+    if (extras.q.trim()) queryParams.q = extras.q.trim();
+
+    const { data } = await api.get<Note[]>("/notes", { params: queryParams });
     setNotes(data || []);
-  }, [mode, params.name, params.id, selectedDate]);
+  }, [mode, params.name, params.id, selectedDate, extras]);
 
   useEffect(() => { fetchAux(); }, [fetchAux]);
   useEffect(() => { fetchCalendar(calMonth.year, calMonth.month); }, [calMonth, fetchCalendar]);
@@ -103,10 +131,65 @@ export default function Dashboard({ mode = "day" }: Props) {
     fetchAux();
   }
 
+  // ---- FilterContext: handle Ctrl/Cmd+click anywhere
+  const filterCtx = useMemo(() => ({
+    tryAddFilter: (type: FilterType, value: string, e: React.MouseEvent): boolean => {
+      if (!(e.ctrlKey || e.metaKey)) return false;
+      setExtras((prev) => {
+        const norm = value.toLowerCase();
+        if (type === "tag") {
+          if (prev.tags.includes(norm)) return prev;
+          toast.success(`+ #${norm}`);
+          return { ...prev, tags: [...prev.tags, norm] };
+        }
+        if (type === "person") {
+          if (prev.people.includes(norm)) return prev;
+          toast.success(`+ @${norm}`);
+          return { ...prev, people: [...prev.people, norm] };
+        }
+        if (type === "location") {
+          if (prev.locationIds.includes(value)) return prev;
+          toast.success("+ konum");
+          return { ...prev, locationIds: [...prev.locationIds, value] };
+        }
+        return prev;
+      });
+      return true;
+    },
+  }), []);
+
+  // ---- Chips for SearchBar
+  const chips: FilterChip[] = useMemo(() => {
+    const list: FilterChip[] = [];
+    if (mode === "tag" && params.name) list.push({ type: "tag", value: params.name, label: `#${params.name}`, locked: true });
+    if (mode === "person" && params.name) list.push({ type: "person", value: params.name, label: `@${params.name}`, locked: true });
+    if (mode === "location" && params.id) {
+      const loc = locationMap[params.id];
+      list.push({ type: "location", value: params.id, label: loc?.name || "konum", locked: true });
+    }
+    extras.tags.forEach((t) => list.push({ type: "tag", value: t, label: `#${t}` }));
+    extras.people.forEach((p) => list.push({ type: "person", value: p, label: `@${p}` }));
+    extras.locationIds.forEach((id) => {
+      const loc = locationMap[id];
+      list.push({ type: "location", value: id, label: loc?.name || "konum" });
+    });
+    return list;
+  }, [mode, params.name, params.id, extras, locationMap]);
+
+  function onRemoveChip(c: FilterChip) {
+    if (c.locked) return;
+    setExtras((prev) => {
+      if (c.type === "tag") return { ...prev, tags: prev.tags.filter((x) => x !== c.value) };
+      if (c.type === "person") return { ...prev, people: prev.people.filter((x) => x !== c.value) };
+      if (c.type === "location") return { ...prev, locationIds: prev.locationIds.filter((x) => x !== c.value) };
+      return prev;
+    });
+  }
+
   function HeaderForMode() {
     if (mode === "tag") {
       return (
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground mb-2 flex items-center gap-1.5">
             <Hash className="w-3 h-3" strokeWidth={1.5} /> Etiket
           </div>
@@ -119,7 +202,7 @@ export default function Dashboard({ mode = "day" }: Props) {
     }
     if (mode === "person") {
       return (
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground mb-2 flex items-center gap-1.5">
             <AtSign className="w-3 h-3" strokeWidth={1.5} /> Kişi
           </div>
@@ -133,7 +216,7 @@ export default function Dashboard({ mode = "day" }: Props) {
     if (mode === "location") {
       const loc = params.id ? locationMap[params.id] : null;
       return (
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground mb-2 flex items-center gap-1.5">
             <MapPin className="w-3 h-3" strokeWidth={1.5} /> Konum
           </div>
@@ -145,7 +228,7 @@ export default function Dashboard({ mode = "day" }: Props) {
     const d = new Date(selectedDate + "T00:00:00");
     const dayLabel = d.toLocaleDateString("tr-TR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
     return (
-      <div className="mb-8">
+      <div className="mb-6">
         <div className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground mb-2">Günce</div>
         <h1 className="font-serif text-4xl sm:text-5xl tracking-tight" data-testid="day-heading">{dayLabel}</h1>
         <p className="text-sm text-muted-foreground mt-1 font-mono">{notes.length} not</p>
@@ -154,78 +237,87 @@ export default function Dashboard({ mode = "day" }: Props) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col paper">
-      <TopBar onLeftMenu={() => setLeftOpen(true)} onRightMenu={() => setRightOpen(true)} />
+    <FilterProvider value={filterCtx}>
+      <div className="min-h-screen flex flex-col paper">
+        <TopBar onLeftMenu={() => setLeftOpen(true)} onRightMenu={() => setRightOpen(true)} />
 
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-[280px_1fr_320px] min-h-0">
-        <div className="hidden lg:block border-r border-border min-h-0 overflow-hidden">
-          <Sidebar tags={tags} people={people} locations={locations} onChange={() => { fetchAux(); fetchNotes(); }} />
-        </div>
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[280px_1fr_320px] min-h-0">
+          <div className="hidden lg:block border-r border-border min-h-0 overflow-hidden">
+            <Sidebar tags={tags} people={people} locations={locations} onChange={() => { fetchAux(); fetchNotes(); }} />
+          </div>
 
-        <main className="min-w-0 max-w-3xl w-full mx-auto px-5 lg:px-10 py-8" data-testid="main-feed">
-          <HeaderForMode />
+          <main className="min-w-0 max-w-3xl w-full mx-auto px-5 lg:px-10 py-8" data-testid="main-feed">
+            <HeaderForMode />
 
-          {mode === "day" && (
-            <div className="mb-8">
-              <NoteComposer
-                defaultDate={selectedDate}
-                locations={locations}
-                onCreated={onNoteCreated}
-                onLocationsChanged={fetchAux}
-              />
-            </div>
-          )}
+            <SearchBar
+              q={extras.q}
+              onQChange={(v) => setExtras((p) => ({ ...p, q: v }))}
+              chips={chips}
+              onRemoveChip={onRemoveChip}
+            />
 
-          <div>
-            {notes.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground font-serif text-xl">
-                Bu seçim için henüz not yok.
-              </div>
-            ) : (
-              notes.map((n) => (
-                <NoteCard
-                  key={n.note_id}
-                  note={n}
-                  locationMap={locationMap}
+            {mode === "day" && (
+              <div className="mb-6">
+                <NoteComposer
+                  defaultDate={selectedDate}
                   locations={locations}
-                  onDelete={onDeleteNote}
-                  onChanged={() => { fetchNotes(); fetchCalendar(calMonth.year, calMonth.month); fetchAux(); }}
+                  onCreated={onNoteCreated}
                   onLocationsChanged={fetchAux}
                 />
-              ))
+              </div>
             )}
+
+            <div>
+              {notes.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground font-serif text-xl">
+                  Bu seçim için henüz not yok.
+                </div>
+              ) : (
+                notes.map((n) => (
+                  <NoteCard
+                    key={n.note_id}
+                    note={n}
+                    locationMap={locationMap}
+                    locations={locations}
+                    onDelete={onDeleteNote}
+                    onChanged={() => { fetchNotes(); fetchCalendar(calMonth.year, calMonth.month); fetchAux(); }}
+                    onLocationsChanged={fetchAux}
+                  />
+                ))
+              )}
+            </div>
+          </main>
+
+          <div className="hidden lg:block border-l border-border min-h-0 overflow-hidden">
+            <CalendarPanel
+              year={calMonth.year}
+              month={calMonth.month}
+              counts={calCounts}
+              selectedDate={mode === "day" ? selectedDate : null}
+              onSelectDate={onSelectDate}
+              onChangeMonth={onChangeMonth}
+            />
           </div>
-        </main>
-
-        <div className="hidden lg:block border-l border-border min-h-0 overflow-hidden">
-          <CalendarPanel
-            year={calMonth.year}
-            month={calMonth.month}
-            counts={calCounts}
-            selectedDate={mode === "day" ? selectedDate : null}
-            onSelectDate={onSelectDate}
-            onChangeMonth={onChangeMonth}
-          />
         </div>
-      </div>
 
-      <Sheet open={leftOpen} onOpenChange={setLeftOpen}>
-        <SheetContent side="left" className="w-[280px] p-0 bg-background border-border" data-testid="mobile-sidebar">
-          <Sidebar tags={tags} people={people} locations={locations} onChange={() => { fetchAux(); fetchNotes(); }} />
-        </SheetContent>
-      </Sheet>
-      <Sheet open={rightOpen} onOpenChange={setRightOpen}>
-        <SheetContent side="right" className="w-[320px] p-0 bg-background border-border" data-testid="mobile-calendar">
-          <CalendarPanel
-            year={calMonth.year}
-            month={calMonth.month}
-            counts={calCounts}
-            selectedDate={mode === "day" ? selectedDate : null}
-            onSelectDate={onSelectDate}
-            onChangeMonth={onChangeMonth}
-          />
-        </SheetContent>
-      </Sheet>
-    </div>
+        <Sheet open={leftOpen} onOpenChange={setLeftOpen}>
+          <SheetContent side="left" className="w-[280px] p-0 bg-background border-border" data-testid="mobile-sidebar">
+            <Sidebar tags={tags} people={people} locations={locations} onChange={() => { fetchAux(); fetchNotes(); }} />
+          </SheetContent>
+        </Sheet>
+        <Sheet open={rightOpen} onOpenChange={setRightOpen}>
+          <SheetContent side="right" className="w-[320px] p-0 bg-background border-border" data-testid="mobile-calendar">
+            <CalendarPanel
+              year={calMonth.year}
+              month={calMonth.month}
+              counts={calCounts}
+              selectedDate={mode === "day" ? selectedDate : null}
+              onSelectDate={onSelectDate}
+              onChangeMonth={onChangeMonth}
+            />
+          </SheetContent>
+        </Sheet>
+      </div>
+    </FilterProvider>
   );
 }

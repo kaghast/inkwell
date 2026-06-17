@@ -6,6 +6,9 @@ export const API = `${BASE}/api`;
 const api = axios.create({
   baseURL: API,
   withCredentials: true,
+  paramsSerializer: {
+    indexes: null, // serialize arrays as repeated keys: tags=a&tags=b
+  },
 });
 
 export default api;

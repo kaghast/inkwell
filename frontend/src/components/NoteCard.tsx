@@ -247,14 +247,22 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
             className="font-serif text-xl border-0 px-0 focus-visible:ring-0 shadow-none"
             data-testid={`edit-title-${note.note_id}`}
           />
-          <MarkdownEditor value={content} onChange={setContent} placeholder="Markdown…" onSubmit={saveEdit} />
-          <div className="flex items-center justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={cancelEdit} data-testid={`edit-cancel-${note.note_id}`}>
-              <X className="w-3.5 h-3.5 mr-1" /> İptal
-            </Button>
-            <Button size="sm" onClick={saveEdit} disabled={busy} data-testid={`edit-save-${note.note_id}`} className="bg-foreground text-background hover:bg-foreground/90 rounded-md">
-              <Save className="w-3.5 h-3.5 mr-1" /> {busy ? "Kaydediliyor..." : "Kaydet"}
-            </Button>
+          <MarkdownEditor value={content} onChange={setContent} placeholder="Markdown…" onSubmit={saveEdit} onCancel={cancelEdit} />
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <kbd className="text-[10px] tracking-[0.15em] uppercase text-muted-foreground font-mono">
+              <span className="px-1.5 py-0.5 rounded border border-border bg-muted">Ctrl</span>
+              {" + "}
+              <span className="px-1.5 py-0.5 rounded border border-border bg-muted">Enter</span>
+              {" "}ile kaydet · <span className="px-1.5 py-0.5 rounded border border-border bg-muted">Esc</span> ile iptal
+            </kbd>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={cancelEdit} data-testid={`edit-cancel-${note.note_id}`}>
+                <X className="w-3.5 h-3.5 mr-1" /> İptal
+              </Button>
+              <Button size="sm" onClick={saveEdit} disabled={busy} data-testid={`edit-save-${note.note_id}`} className="bg-foreground text-background hover:bg-foreground/90 rounded-md">
+                <Save className="w-3.5 h-3.5 mr-1" /> {busy ? "Kaydediliyor..." : "Kaydet"}
+              </Button>
+            </div>
           </div>
         </div>
       ) : (

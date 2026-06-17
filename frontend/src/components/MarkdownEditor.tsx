@@ -19,9 +19,10 @@ interface Props {
   placeholder?: string;
   autoFocus?: boolean;
   onSubmit?: () => void;
+  onCancel?: () => void;
 }
 
-export default function MarkdownEditor({ value, onChange, placeholder, autoFocus, onSubmit }: Props) {
+export default function MarkdownEditor({ value, onChange, placeholder, autoFocus, onSubmit, onCancel }: Props) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
   const [popup, setPopup] = useState<PopupState | null>(null);
 
@@ -110,6 +111,10 @@ export default function MarkdownEditor({ value, onChange, placeholder, autoFocus
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSubmit) {
       e.preventDefault();
       onSubmit();
+    }
+    if (e.key === "Escape" && !popup && onCancel) {
+      e.preventDefault();
+      onCancel();
     }
   }
 
