@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Feather } from "lucide-react";
+import type { User } from "@/types";
 
 export default function AuthCallback() {
   const navigate = useNavigate();
@@ -23,14 +24,14 @@ export default function AuthCallback() {
 
     (async () => {
       try {
-        const { data } = await api.post(
+        const { data } = await api.post<User>(
           "/auth/google/session",
           null,
           { headers: { "X-Session-ID": sessionId } }
         );
         setUser(data);
         navigate("/", { replace: true });
-      } catch (e) {
+      } catch {
         navigate("/login", { replace: true });
       }
     })();

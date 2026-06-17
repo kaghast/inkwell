@@ -1,4 +1,4 @@
-import React from "react";
+import React, { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link } from "react-router-dom";
@@ -6,24 +6,21 @@ import { Link } from "react-router-dom";
 const TAG_RE = /(^|\s)#([\w\-_ğüşıöçĞÜŞİÖÇ]+)/gu;
 const MEN_RE = /(^|\s)@([\w\-_ğüşıöçĞÜŞİÖÇ]+)/gu;
 
-function transformChildren(children) {
-  if (!Array.isArray(children)) children = [children];
-  const out = [];
-  children.forEach((child, idx) => {
+function transformChildren(children: ReactNode): ReactNode[] {
+  const arr = Array.isArray(children) ? children : [children];
+  const out: ReactNode[] = [];
+  arr.forEach((child, idx) => {
     if (typeof child !== "string") {
       out.push(child);
       return;
     }
-    let text = child;
-    // Process #tags and @mentions
-    let pieces = [text];
-    // tags
+    let pieces: ReactNode[] = [child];
     pieces = pieces.flatMap((p, i) => {
       if (typeof p !== "string") return [p];
-      const parts = [];
+      const parts: ReactNode[] = [];
       let last = 0;
       const re = new RegExp(TAG_RE.source, "gu");
-      let m;
+      let m: RegExpExecArray | null;
       while ((m = re.exec(p)) !== null) {
         if (m.index + m[1].length > last) parts.push(p.slice(last, m.index + m[1].length));
         const tagName = m[2].toLowerCase();
@@ -37,13 +34,12 @@ function transformChildren(children) {
       if (last < p.length) parts.push(p.slice(last));
       return parts;
     });
-    // mentions
     pieces = pieces.flatMap((p, i) => {
       if (typeof p !== "string") return [p];
-      const parts = [];
+      const parts: ReactNode[] = [];
       let last = 0;
       const re = new RegExp(MEN_RE.source, "gu");
-      let m;
+      let m: RegExpExecArray | null;
       while ((m = re.exec(p)) !== null) {
         if (m.index + m[1].length > last) parts.push(p.slice(last, m.index + m[1].length));
         const name = m[2].toLowerCase();
@@ -62,7 +58,7 @@ function transformChildren(children) {
   return out;
 }
 
-export default function MarkdownView({ content }) {
+export default function MarkdownView({ content }: { content: string }) {
   return (
     <div className="prose-paper" data-testid="markdown-view">
       <ReactMarkdown

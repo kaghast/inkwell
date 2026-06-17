@@ -1,23 +1,28 @@
-import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import React, { useState, ComponentType } from "react";
+import { useNavigate } from "react-router-dom";
 import { Hash, AtSign, MapPin, Pencil, Trash2, X, Check } from "lucide-react";
 import api from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import type { Tag, Person, LocationItem } from "@/types";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-function EditableRow({ icon: Icon, label, to, onRename, onDelete, accentClass, testid }) {
+interface EditableRowProps {
+  icon: ComponentType<{ className?: string; strokeWidth?: number }>;
+  label: string;
+  to: string;
+  onRename: (newName: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+  accentClass: string;
+  testid: string;
+}
+
+function EditableRow({ icon: Icon, label, to, onRename, onDelete, accentClass, testid }: EditableRowProps) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(label);
   const nav = useNavigate();
@@ -29,7 +34,7 @@ function EditableRow({ icon: Icon, label, to, onRename, onDelete, accentClass, t
       await onRename(trimmed);
       toast.success("Güncellendi");
       setEditing(false);
-    } catch (e) {
+    } catch (e: any) {
       toast.error(e?.response?.data?.detail || "Hata");
     }
   }
@@ -86,7 +91,14 @@ function EditableRow({ icon: Icon, label, to, onRename, onDelete, accentClass, t
   );
 }
 
-export default function Sidebar({ tags, people, locations, onChange }) {
+interface SidebarProps {
+  tags: Tag[];
+  people: Person[];
+  locations: LocationItem[];
+  onChange: () => void;
+}
+
+export default function Sidebar({ tags, people, locations, onChange }: SidebarProps) {
   return (
     <aside className="h-full overflow-y-auto p-6 space-y-7" data-testid="sidebar">
       <div>

@@ -11,7 +11,6 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 
 function AppRoutes() {
   const location = useLocation();
-  // Detect Emergent session_id in URL fragment synchronously to avoid race
   if (location.hash && location.hash.includes("session_id=")) {
     return <AuthCallback />;
   }

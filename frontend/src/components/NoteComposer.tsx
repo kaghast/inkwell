@@ -6,12 +6,20 @@ import MarkdownEditor from "@/components/MarkdownEditor";
 import LocationPicker from "@/components/LocationPicker";
 import api from "@/lib/api";
 import { toast } from "sonner";
+import type { Note, LocationItem } from "@/types";
 
-export default function NoteComposer({ defaultDate, locations, onCreated, onLocationsChanged }) {
+interface Props {
+  defaultDate: string;
+  locations: LocationItem[];
+  onCreated: (n: Note) => void;
+  onLocationsChanged?: () => void;
+}
+
+export default function NoteComposer({ defaultDate, locations, onCreated, onLocationsChanged }: Props) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [locationId, setLocationId] = useState(null);
+  const [locationId, setLocationId] = useState<string | null>(null);
   const [locationDialog, setLocationDialog] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -26,20 +34,20 @@ export default function NoteComposer({ defaultDate, locations, onCreated, onLoca
     }
     setBusy(true);
     try {
-      const { data } = await api.post("/notes", {
+      const { data } = await api.post<Note>("/notes", {
         title, content, date: defaultDate, location_id: locationId,
       });
       onCreated(data);
       reset();
       toast.success("Not eklendi");
-    } catch (e) {
+    } catch {
       toast.error("Kayıt başarısız");
     } finally { setBusy(false); }
   }
 
-  async function saveNewLocation({ name, lat, lng }) {
+  async function saveNewLocation({ name, lat, lng }: { name: string; lat: number; lng: number }) {
     try {
-      const { data } = await api.post("/locations", { name, lat, lng });
+      const { data } = await api.post<LocationItem>("/locations", { name, lat, lng });
       setLocationId(data.location_id);
       onLocationsChanged && onLocationsChanged();
       toast.success("Konum eklendi");

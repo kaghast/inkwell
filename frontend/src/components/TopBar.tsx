@@ -9,12 +9,19 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import type { User } from "@/types";
 
-export default function TopBar({ onLeftMenu, onRightMenu }) {
+interface Props {
+  onLeftMenu?: () => void;
+  onRightMenu?: () => void;
+}
+
+export default function TopBar({ onLeftMenu, onRightMenu }: Props) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
+  const u = user as User | false | null;
 
-  const initials = (user?.name || user?.email || "?").slice(0, 2).toUpperCase();
+  const initials = ((u && u.name) || (u && u.email) || "?").slice(0, 2).toUpperCase();
 
   return (
     <header
@@ -22,12 +29,7 @@ export default function TopBar({ onLeftMenu, onRightMenu }) {
       data-testid="topbar"
     >
       <div className="flex items-center gap-2">
-        <Button
-          size="icon" variant="ghost"
-          className="lg:hidden h-8 w-8"
-          onClick={onLeftMenu}
-          data-testid="topbar-left-menu-btn"
-        >
+        <Button size="icon" variant="ghost" className="lg:hidden h-8 w-8" onClick={onLeftMenu} data-testid="topbar-left-menu-btn">
           <Menu className="w-4 h-4" strokeWidth={1.25} />
         </Button>
         <Link to="/" className="flex items-center gap-2">
@@ -37,32 +39,27 @@ export default function TopBar({ onLeftMenu, onRightMenu }) {
       </div>
 
       <div className="flex items-center gap-1">
-        <Button
-          size="icon" variant="ghost"
-          className="lg:hidden h-8 w-8"
-          onClick={onRightMenu}
-          data-testid="topbar-right-menu-btn"
-        >
+        <Button size="icon" variant="ghost" className="lg:hidden h-8 w-8" onClick={onRightMenu} data-testid="topbar-right-menu-btn">
           <CalendarDays className="w-4 h-4" strokeWidth={1.25} />
         </Button>
         <Button size="icon" variant="ghost" className="h-8 w-8" onClick={toggle} data-testid="theme-toggle-btn">
           {theme === "dark" ? <Sun className="w-4 h-4" strokeWidth={1.25} /> : <Moon className="w-4 h-4" strokeWidth={1.25} />}
         </Button>
 
-        {user && user.user_id && (
+        {u && u.user_id && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="ml-1 outline-none" data-testid="user-menu-btn">
                 <Avatar className="h-7 w-7">
-                  {user.picture && <AvatarImage src={user.picture} alt={user.name} />}
+                  {u.picture && <AvatarImage src={u.picture} alt={u.name || ""} />}
                   <AvatarFallback className="text-xs font-mono bg-secondary">{initials}</AvatarFallback>
                 </Avatar>
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56 bg-popover border-border">
               <DropdownMenuLabel className="font-mono text-xs">
-                <div className="truncate">{user.name}</div>
-                <div className="text-muted-foreground truncate">{user.email}</div>
+                <div className="truncate">{u.name}</div>
+                <div className="text-muted-foreground truncate">{u.email}</div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={logout} data-testid="logout-btn" className="cursor-pointer">

@@ -6,17 +6,30 @@ import MiniMap from "@/components/MiniMap";
 import { toast } from "sonner";
 import { MapPin, Locate } from "lucide-react";
 
-export default function LocationPicker({ open, onOpenChange, initial, onSave }) {
-  const [name, setName] = useState(initial?.name || "");
-  const [coords, setCoords] = useState(
-    initial?.lat != null ? { lat: initial.lat, lng: initial.lng } : null
+interface InitialLocation {
+  name?: string;
+  lat?: number;
+  lng?: number;
+}
+
+interface Props {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  initial?: InitialLocation;
+  onSave: (loc: { name: string; lat: number; lng: number }) => void;
+}
+
+export default function LocationPicker({ open, onOpenChange, initial, onSave }: Props) {
+  const [name, setName] = useState<string>(initial?.name || "");
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
+    initial?.lat != null && initial?.lng != null ? { lat: initial.lat, lng: initial.lng } : null
   );
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
       setName(initial?.name || "");
-      setCoords(initial?.lat != null ? { lat: initial.lat, lng: initial.lng } : null);
+      setCoords(initial?.lat != null && initial?.lng != null ? { lat: initial.lat, lng: initial.lng } : null);
     }
   }, [open, initial]);
 

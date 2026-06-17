@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { Feather } from "lucide-react";
+import type { User } from "@/types";
 
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
 function googleLogin() {
@@ -15,30 +16,33 @@ function googleLogin() {
   window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
 }
 
+type Tab = "login" | "register";
+
 export default function Login() {
   const { user, setUser } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
-  const [tab, setTab] = useState("login");
+  const [tab, setTab] = useState<Tab>("login");
   const [form, setForm] = useState({ email: "", password: "", name: "" });
   const [busy, setBusy] = useState(false);
 
-  if (user && user.user_id) return <Navigate to="/" replace />;
+  if (user && (user as User).user_id) return <Navigate to="/" replace />;
 
-  async function submit(e) {
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
     try {
       if (tab === "login") {
-        const { data } = await api.post("/auth/login", { email: form.email, password: form.password });
+        const { data } = await api.post<User>("/auth/login", { email: form.email, password: form.password });
         setUser(data);
         toast.success("Hoşgeldiniz");
       } else {
-        const { data } = await api.post("/auth/register", { email: form.email, password: form.password, name: form.name });
+        const { data } = await api.post<User>("/auth/register", { email: form.email, password: form.password, name: form.name });
         setUser(data);
         toast.success("Hesap oluşturuldu");
       }
-      nav(location.state?.from || "/", { replace: true });
+      const from = (location.state as { from?: string } | null)?.from || "/";
+      nav(from, { replace: true });
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {
@@ -48,7 +52,6 @@ export default function Login() {
 
   return (
     <div className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2 paper" data-testid="login-page">
-      {/* Left brand */}
       <div className="hidden lg:flex flex-col justify-between p-12 relative overflow-hidden border-r border-border" style={{ background: "hsl(var(--surface))" }}>
         <div className="flex items-center gap-2 text-foreground">
           <Feather className="w-5 h-5" strokeWidth={1.25} />
@@ -69,7 +72,6 @@ export default function Login() {
         <div className="font-mono text-xs text-muted-foreground">v1.0 — beta</div>
       </div>
 
-      {/* Right form */}
       <div className="flex items-center justify-center p-6 lg:p-12">
         <div className="w-full max-w-sm">
           <div className="flex lg:hidden items-center gap-2 mb-8">
@@ -83,7 +85,7 @@ export default function Login() {
             {tab === "login" ? "Notlarınıza erişmek için giriş yapın" : "Birkaç saniyede başlayın"}
           </p>
 
-          <Tabs value={tab} onValueChange={setTab} className="w-full">
+          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="w-full">
             <TabsList className="grid grid-cols-2 mb-6 bg-secondary">
               <TabsTrigger value="login" data-testid="tab-login">Giriş</TabsTrigger>
               <TabsTrigger value="register" data-testid="tab-register">Kayıt</TabsTrigger>

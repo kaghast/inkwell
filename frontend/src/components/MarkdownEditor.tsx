@@ -1,25 +1,39 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import api from "@/lib/api";
+import type { Tag, Person } from "@/types";
 
-/**
- * Markdown textarea with #tag / @person autocomplete.
- * Props: value, onChange, placeholder, autoFocus
- */
-export default function MarkdownEditor({ value, onChange, placeholder, autoFocus, onSubmit }) {
-  const ref = useRef(null);
-  const [popup, setPopup] = useState(null); // { type: 'tag'|'person', items: [], start: number, query: string, selected: 0 }
+type SuggestionItem = Tag | Person;
 
-  async function fetchSuggestions(type, query) {
+interface PopupState {
+  type: "tag" | "person";
+  items: SuggestionItem[];
+  start: number;
+  query: string;
+  selected: number;
+}
+
+interface Props {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+  onSubmit?: () => void;
+}
+
+export default function MarkdownEditor({ value, onChange, placeholder, autoFocus, onSubmit }: Props) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const [popup, setPopup] = useState<PopupState | null>(null);
+
+  async function fetchSuggestions(type: "tag" | "person", query: string): Promise<SuggestionItem[]> {
     const url = type === "tag" ? "/tags" : "/people";
-    const { data } = await api.get(url, { params: { q: query } });
+    const { data } = await api.get<SuggestionItem[]>(url, { params: { q: query } });
     return data || [];
   }
 
-  function getActiveToken(text, caret) {
-    // Walk back from caret to find a # or @ token boundary
+  function getActiveToken(text: string, caret: number): { type: "tag" | "person"; start: number; query: string } | null {
     let i = caret - 1;
-    let chars = [];
+    const chars: string[] = [];
     while (i >= 0) {
       const ch = text[i];
       if (ch === " " || ch === "\n" || ch === "\t") break;
@@ -32,7 +46,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, autoFocus
     return null;
   }
 
-  async function onChangeTextarea(e) {
+  async function onChangeTextarea(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const text = e.target.value;
     onChange(text);
     const el = e.target;
@@ -40,15 +54,13 @@ export default function MarkdownEditor({ value, onChange, placeholder, autoFocus
     const token = getActiveToken(text, caret);
     if (token) {
       const items = await fetchSuggestions(token.type, token.query);
-      // Compute caret position for popup
-      const rect = el.getBoundingClientRect();
-      setPopup({ ...token, items, selected: 0, top: rect.bottom + 4, left: rect.left });
+      setPopup({ ...token, items, selected: 0 });
     } else {
       setPopup(null);
     }
   }
 
-  function applySuggestion(name) {
+  function applySuggestion(name: string) {
     if (!popup || !ref.current) return;
     const el = ref.current;
     const text = el.value;
@@ -67,7 +79,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, autoFocus
     });
   }
 
-  function onKeyDown(e) {
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (popup && popup.items.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -123,19 +135,22 @@ export default function MarkdownEditor({ value, onChange, placeholder, autoFocus
             {popup.type === "tag" ? "Etiketler" : "Kişiler"}
           </div>
           <ul className="max-h-56 overflow-auto py-1">
-            {popup.items.slice(0, 8).map((it, idx) => (
-              <li
-                key={it.tag_id || it.person_id}
-                onMouseDown={(e) => { e.preventDefault(); applySuggestion(it.name); }}
-                className={`px-3 py-1.5 cursor-pointer text-sm font-mono flex items-center gap-2 ${idx === popup.selected ? "bg-accent" : ""}`}
-                data-testid={`autocomplete-item-${idx}`}
-              >
-                <span className={popup.type === "tag" ? "text-[hsl(var(--accent-tag))]" : "text-[hsl(var(--accent-mention))]"}>
-                  {popup.type === "tag" ? "#" : "@"}
-                </span>
-                {it.name}
-              </li>
-            ))}
+            {popup.items.slice(0, 8).map((it, idx) => {
+              const key = (it as Tag).tag_id ?? (it as Person).person_id;
+              return (
+                <li
+                  key={key}
+                  onMouseDown={(e) => { e.preventDefault(); applySuggestion(it.name); }}
+                  className={`px-3 py-1.5 cursor-pointer text-sm font-mono flex items-center gap-2 ${idx === popup.selected ? "bg-accent" : ""}`}
+                  data-testid={`autocomplete-item-${idx}`}
+                >
+                  <span className={popup.type === "tag" ? "text-[hsl(var(--accent-tag))]" : "text-[hsl(var(--accent-mention))]"}>
+                    {popup.type === "tag" ? "#" : "@"}
+                  </span>
+                  {it.name}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

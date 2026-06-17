@@ -8,28 +8,32 @@ import NoteComposer from "@/components/NoteComposer";
 import TopBar from "@/components/TopBar";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Hash, AtSign, MapPin } from "lucide-react";
+import type { Note, Tag, Person, LocationItem, CalendarCounts, DashboardMode } from "@/types";
 
-function todayIso() {
+function todayIso(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export default function Dashboard({ mode = "day" }) {
-  // mode: 'day' | 'tag' | 'person' | 'location'
-  const params = useParams();
+interface Props {
+  mode?: DashboardMode;
+}
+
+export default function Dashboard({ mode = "day" }: Props) {
+  const params = useParams<{ date?: string; name?: string; id?: string }>();
   const navigate = useNavigate();
 
-  const [notes, setNotes] = useState([]);
-  const [tags, setTags] = useState([]);
-  const [people, setPeople] = useState([]);
-  const [locations, setLocations] = useState([]);
-  const [calCounts, setCalCounts] = useState({});
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [locations, setLocations] = useState<LocationItem[]>([]);
+  const [calCounts, setCalCounts] = useState<CalendarCounts>({});
 
   const todayInit = todayIso();
   const initDate = params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : todayInit;
 
-  const [selectedDate, setSelectedDate] = useState(initDate);
-  const [calMonth, setCalMonth] = useState({
+  const [selectedDate, setSelectedDate] = useState<string>(initDate);
+  const [calMonth, setCalMonth] = useState<{ year: number; month: number }>({
     year: parseInt(initDate.slice(0, 4)),
     month: parseInt(initDate.slice(5, 7)),
   });
@@ -37,32 +41,32 @@ export default function Dashboard({ mode = "day" }) {
   const [rightOpen, setRightOpen] = useState(false);
 
   const locationMap = useMemo(() => {
-    const m = {};
+    const m: Record<string, LocationItem> = {};
     locations.forEach((l) => (m[l.location_id] = l));
     return m;
   }, [locations]);
 
   const fetchAux = useCallback(async () => {
     const [t, p, l] = await Promise.all([
-      api.get("/tags"),
-      api.get("/people"),
-      api.get("/locations"),
+      api.get<Tag[]>("/tags"),
+      api.get<Person[]>("/people"),
+      api.get<LocationItem[]>("/locations"),
     ]);
     setTags(t.data); setPeople(p.data); setLocations(l.data);
   }, []);
 
-  const fetchCalendar = useCallback(async (y, m) => {
-    const { data } = await api.get("/notes/calendar", { params: { year: y, month: m } });
+  const fetchCalendar = useCallback(async (y: number, m: number) => {
+    const { data } = await api.get<CalendarCounts>("/notes/calendar", { params: { year: y, month: m } });
     setCalCounts(data || {});
   }, []);
 
   const fetchNotes = useCallback(async () => {
-    const params_ = {};
-    if (mode === "day") params_.date = selectedDate;
-    if (mode === "tag") params_.tag = params.name;
-    if (mode === "person") params_.person = params.name;
-    if (mode === "location") params_.location_id = params.id;
-    const { data } = await api.get("/notes", { params: params_ });
+    const q: Record<string, string> = {};
+    if (mode === "day") q.date = selectedDate;
+    if (mode === "tag" && params.name) q.tag = params.name;
+    if (mode === "person" && params.name) q.person = params.name;
+    if (mode === "location" && params.id) q.location_id = params.id;
+    const { data } = await api.get<Note[]>("/notes", { params: q });
     setNotes(data || []);
   }, [mode, params.name, params.id, selectedDate]);
 
@@ -70,13 +74,13 @@ export default function Dashboard({ mode = "day" }) {
   useEffect(() => { fetchCalendar(calMonth.year, calMonth.month); }, [calMonth, fetchCalendar]);
   useEffect(() => { fetchNotes(); }, [fetchNotes]);
 
-  function onSelectDate(iso) {
+  function onSelectDate(iso: string) {
     setSelectedDate(iso);
     navigate(`/day/${iso}`);
     setRightOpen(false);
   }
 
-  function onChangeMonth(delta) {
+  function onChangeMonth(delta: number) {
     setCalMonth((cm) => {
       let m = cm.month + delta;
       let y = cm.year;
@@ -86,7 +90,7 @@ export default function Dashboard({ mode = "day" }) {
     });
   }
 
-  async function onDeleteNote(id) {
+  async function onDeleteNote(id: string) {
     await api.delete(`/notes/${id}`);
     fetchNotes();
     fetchCalendar(calMonth.year, calMonth.month);
@@ -127,7 +131,7 @@ export default function Dashboard({ mode = "day" }) {
       );
     }
     if (mode === "location") {
-      const loc = locationMap[params.id];
+      const loc = params.id ? locationMap[params.id] : null;
       return (
         <div className="mb-8">
           <div className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground mb-2 flex items-center gap-1.5">
@@ -154,12 +158,10 @@ export default function Dashboard({ mode = "day" }) {
       <TopBar onLeftMenu={() => setLeftOpen(true)} onRightMenu={() => setRightOpen(true)} />
 
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-[280px_1fr_320px] min-h-0">
-        {/* Sidebar desktop */}
         <div className="hidden lg:block border-r border-border min-h-0 overflow-hidden">
           <Sidebar tags={tags} people={people} locations={locations} onChange={() => { fetchAux(); fetchNotes(); }} />
         </div>
 
-        {/* Center */}
         <main className="min-w-0 max-w-3xl w-full mx-auto px-5 lg:px-10 py-8" data-testid="main-feed">
           <HeaderForMode />
 
@@ -187,7 +189,6 @@ export default function Dashboard({ mode = "day" }) {
           </div>
         </main>
 
-        {/* Calendar desktop */}
         <div className="hidden lg:block border-l border-border min-h-0 overflow-hidden">
           <CalendarPanel
             year={calMonth.year}
@@ -200,7 +201,6 @@ export default function Dashboard({ mode = "day" }) {
         </div>
       </div>
 
-      {/* Mobile drawers */}
       <Sheet open={leftOpen} onOpenChange={setLeftOpen}>
         <SheetContent side="left" className="w-[280px] p-0 bg-background border-border" data-testid="mobile-sidebar">
           <Sidebar tags={tags} people={people} locations={locations} onChange={() => { fetchAux(); fetchNotes(); }} />

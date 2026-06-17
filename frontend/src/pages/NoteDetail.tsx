@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, MapPin, Pencil, Save, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import type { Note, LocationItem } from "@/types";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -17,27 +18,28 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export default function NoteDetail() {
-  const { id } = useParams();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [note, setNote] = useState(null);
-  const [loc, setLoc] = useState(null);
+  const [note, setNote] = useState<Note | null>(null);
+  const [loc, setLoc] = useState<LocationItem | null>(null);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [locationId, setLocationId] = useState(null);
-  const [locations, setLocations] = useState([]);
+  const [locationId, setLocationId] = useState<string | null>(null);
+  const [locations, setLocations] = useState<LocationItem[]>([]);
   const [picker, setPicker] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (!id) return;
     (async () => {
       try {
-        const { data } = await api.get(`/notes/${id}`);
+        const { data } = await api.get<Note>(`/notes/${id}`);
         setNote(data);
         setTitle(data.title || "");
         setContent(data.content || "");
         setLocationId(data.location_id || null);
-        const locsRes = await api.get("/locations");
+        const locsRes = await api.get<LocationItem[]>("/locations");
         setLocations(locsRes.data || []);
         if (data.location_id) {
           const found = (locsRes.data || []).find((l) => l.location_id === data.location_id);
@@ -51,9 +53,10 @@ export default function NoteDetail() {
   }, [id, navigate]);
 
   async function save() {
+    if (!note) return;
     setBusy(true);
     try {
-      const { data } = await api.put(`/notes/${id}`, {
+      const { data } = await api.put<Note>(`/notes/${id}`, {
         title, content, date: note.date, location_id: locationId,
       });
       setNote(data);
@@ -71,9 +74,9 @@ export default function NoteDetail() {
     navigate("/");
   }
 
-  async function saveNewLocation({ name, lat, lng }) {
+  async function saveNewLocation({ name, lat, lng }: { name: string; lat: number; lng: number }) {
     try {
-      const { data } = await api.post("/locations", { name, lat, lng });
+      const { data } = await api.post<LocationItem>("/locations", { name, lat, lng });
       setLocations((prev) => [data, ...prev]);
       setLocationId(data.location_id);
       setLoc(data);

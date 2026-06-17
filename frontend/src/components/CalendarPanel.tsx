@@ -1,13 +1,13 @@
 import React, { useMemo } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { CalendarCounts } from "@/types";
 
-function getMonthGrid(year, month) {
-  // month is 0-indexed for Date
+function getMonthGrid(year: number, month: number): (number | null)[] {
   const first = new Date(year, month, 1);
-  const startDay = (first.getDay() + 6) % 7; // make Monday=0
+  const startDay = (first.getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [];
+  const cells: (number | null)[] = [];
   for (let i = 0; i < startDay; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
   while (cells.length % 7 !== 0) cells.push(null);
@@ -19,15 +19,22 @@ const MONTHS = [
   "Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"
 ];
 
-export default function CalendarPanel({ year, month, onChangeMonth, counts, selectedDate, onSelectDate }) {
-  // month is 1-indexed in props
+interface Props {
+  year: number;
+  month: number; // 1-12
+  onChangeMonth: (delta: number) => void;
+  counts: CalendarCounts;
+  selectedDate: string | null;
+  onSelectDate: (iso: string) => void;
+}
+
+export default function CalendarPanel({ year, month, onChangeMonth, counts, selectedDate, onSelectDate }: Props) {
   const cells = useMemo(() => getMonthGrid(year, month - 1), [year, month]);
   const today = new Date();
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-  function fmtCellDate(d) {
-    return `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  }
+  const fmtCellDate = (d: number) =>
+    `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 
   return (
     <aside className="h-full overflow-y-auto p-6 space-y-4" data-testid="calendar-panel">
@@ -46,9 +53,7 @@ export default function CalendarPanel({ year, month, onChangeMonth, counts, sele
 
       <div className="grid grid-cols-7 gap-1">
         {WEEKDAYS.map((w) => (
-          <div key={w} className="text-center text-[10px] tracking-[0.15em] uppercase text-muted-foreground py-1">
-            {w}
-          </div>
+          <div key={w} className="text-center text-[10px] tracking-[0.15em] uppercase text-muted-foreground py-1">{w}</div>
         ))}
         {cells.map((d, i) => {
           if (!d) return <div key={i} />;
