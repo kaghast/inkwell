@@ -1,0 +1,92 @@
+{
+  "theme_and_archetype": {
+    "domain": "Productivity, Journal, Note-taking",
+    "theme": "Light & Dark Mode Toggle",
+    "archetype": "Archetype 1 (Organic & Earthy) blended with Editorial Journal aesthetic. Tactile paper, ink, and sophisticated typography.",
+    "reasoning": "The application requires a sophisticated daily journal feel, avoiding standard 'SaaS' purple/blue gradients and 'Inter' fonts. Grounded, organic palettes inspire a sense of physical writing and reflection."
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Cormorant Garamond",
+      "body": "Manrope",
+      "monospace": "JetBrains Mono"
+    },
+    "sizes": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight",
+      "h3": "text-xl sm:text-2xl",
+      "body": "text-base leading-relaxed",
+      "small_labels": "text-xs tracking-[0.2em] uppercase font-semibold"
+    },
+    "guidelines": "Avoid default font pairings. Use Cormorant Garamond for all section headers and editor titles. Use JetBrains Mono for Markdown formatting elements like #tags and @mentions to give a 'typewriter' contrast against the elegant serif."
+  },
+  "colors": {
+    "light_mode": {
+      "background": "#FAF9F6",
+      "surface": "#F2EFEB",
+      "text_primary": "#1A1A1A",
+      "text_secondary": "#5C5C5C",
+      "border": "#E5E1DA",
+      "accent_tag": "#E07A5F",
+      "accent_mention": "#8A9A86"
+    },
+    "dark_mode": {
+      "background": "#141514",
+      "surface": "#1A1C1A",
+      "text_primary": "#EAE5D9",
+      "text_secondary": "#A3A09A",
+      "border": "#2C2E2C",
+      "accent_tag": "#C26C51",
+      "accent_mention": "#5C6A53"
+    },
+    "rules": "No pure whites (#FFFFFF) or pure blacks (#000000) except for highest contrast needs. The interface must feel like textured paper and ink. Use 'Tinted Grey' rule. The accent colors are muted terracotta (for tags) and dried sage/moss (for mentions) to preserve the organic feel."
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous spacing. Allow the typography and content to breathe like an editorial magazine.",
+    "desktop_grid": "3-column layout. Left Sidebar: 280px (w-72), Right Sidebar: 320px (w-80), Center: flex-1. Use a strict grid with border-r and border-l separating the columns to mimic column rules in a newspaper.",
+    "mobile_grid": "Mobile-first approach. Only Center column is visible by default. Left Sidebar moves to a Drawer/Hamburger menu. Right calendar moves to a bottom sheet or toggleable top-bar component.",
+    "padding": "Containers with borders must use p-6 or p-8 to prevent text collision."
+  },
+  "surfaces_and_borders": {
+    "cards": "Cardless approach. Instead of floating cards with drop-shadows, use flat surfaces with a 1px delicate border (`border-border`) and no shadow, or subtle 1px inner highlights.",
+    "glassmorphism": "For sticky headers or floating autocomplete menus, use Glassmorphism (backdrop-blur-xl) with a tinted background (bg-[#FAF9F6]/80 or bg-[#141514]/80) and a sharp 1px border. No muddy gray transparency."
+  },
+  "components": {
+    "editor": "A clean, distraction-free central area. Inputs should be borderless and autosizing. Markdown elements should be distinct. #tags should wrap in a subtle background pill with the 'accent_tag' color. @mentions should wrap with 'accent_mention' color.",
+    "autocomplete_dropdown": "Must use Shadcn Popover/Command component logic but heavily customized to look like a small slip of paper (flat, 1px border, backdrop-blur).",
+    "calendar": "Shadcn Calendar component, customized to remove heavy blue selections. Selected days should be indicated by a subtle ink-colored circle. Badges for note counts should be tiny serif numbers placed in the top-right of the date cell.",
+    "buttons": "Neumorphic 'Tactile' variants or sharp-edged flat buttons. On light mode: bg-text_primary text-background. On dark mode: bg-text_primary text-background.",
+    "map": "Leaflet map container should be rendered in grayscale or a custom muted style to fit the organic aesthetic, rather than the bright default map tiles."
+  },
+  "motion": {
+    "guidelines": "Minimalist. Fades (opacity) and slight vertical shifts (-translate-y-1). Do not use bouncy spring animations. The application is a serious tool.",
+    "hover_states": "Interactive elements must always explicitly change text/background color on hover to improve accessibility without relying on defaults."
+  },
+  "icons_and_assets": {
+    "library": "lucide-react (default) with 1px or 1.5px stroke widths for a lighter, more delicate feel matching the serif fonts.",
+    "media": {
+      "hero_image_url": {
+        "url": "https://images.unsplash.com/photo-1652345666875-99df6cd45b1f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzZ8MHwxfHNlYXJjaHwxfHx2aW50YWdlJTIwam91cm5hbCUyMG9wZW4lMjBmbGF0bGF5fGVufDB8fHx8MTc4MTY4MzczM3ww&ixlib=rb-4.1.0&q=85",
+        "description": "Vintage journal open flatlay - Use for Login/Register split-screen hero section.",
+        "category": "hero"
+      },
+      "texture_image_url": {
+        "url": "https://images.unsplash.com/photo-1629196912832-c8d4a01f6c25?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNDR8MHwxfHNlYXJjaHwxfHxpbmslMjBkcm9wJTIwdGV4dHVyZXxlbnwwfHx8fDE3ODE2ODM3MzN8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Ink drop texture - Can be used as a very subtle, low-opacity background blend (5-10% opacity) in empty states or auth pages.",
+        "category": "background_texture"
+      }
+    }
+  },
+  "testing": {
+    "requirements": "All interactive and key informational elements MUST include a `data-testid` attribute. E.g., `data-testid='login-submit-button'`, `data-testid='note-editor-input'`, `data-testid='calendar-day-cell'`."
+  },
+  "instructions_to_main_agent": [
+    "Install custom fonts (Cormorant Garamond, Manrope, JetBrains Mono) via Google Fonts in index.css.",
+    "Configure Tailwind spacing scale and custom color palette.",
+    "Build the 3-column layout strictly for desktop, abstracting the left and right columns into collapsible UI for mobile.",
+    "Implement light/dark mode toggle using a context provider, ensuring the 'dark' class toggles root CSS variables.",
+    "Use Shadcn UI for the calendar and dropdown/autocomplete components, but override default styles to match the 'paper and ink' aesthetic.",
+    "Ensure Leaflet maps use a custom tile layer url or CSS filters (grayscale/sepia) to fit the mood.",
+    "Add 'data-testid' attributes extensively as mandated."
+  ]
+}
