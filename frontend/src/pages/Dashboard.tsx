@@ -178,12 +178,20 @@ export default function Dashboard({ mode = "day" }: Props) {
 
           <div>
             {notes.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground italic font-serif text-xl">
+              <div className="text-center py-16 text-muted-foreground font-serif text-xl">
                 Bu seçim için henüz not yok.
               </div>
             ) : (
               notes.map((n) => (
-                <NoteCard key={n.note_id} note={n} locationMap={locationMap} onDelete={onDeleteNote} />
+                <NoteCard
+                  key={n.note_id}
+                  note={n}
+                  locationMap={locationMap}
+                  locations={locations}
+                  onDelete={onDeleteNote}
+                  onChanged={() => { fetchNotes(); fetchCalendar(calMonth.year, calMonth.month); fetchAux(); }}
+                  onLocationsChanged={fetchAux}
+                />
               ))
             )}
           </div>

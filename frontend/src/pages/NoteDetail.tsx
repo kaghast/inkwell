@@ -148,7 +148,7 @@ export default function NoteDetail() {
           <>
             <div className="flex items-start justify-between gap-4 mb-4">
               <h1 className="font-serif text-4xl sm:text-5xl tracking-tight leading-[1.05]" data-testid="note-title">
-                {note.title || <span className="italic text-muted-foreground">Başlıksız</span>}
+                {note.title || <span className="text-muted-foreground">Başlıksız</span>}
               </h1>
               <div className="flex items-center gap-1">
                 <Button size="icon" variant="ghost" onClick={() => setEditing(true)} data-testid="edit-note-btn">

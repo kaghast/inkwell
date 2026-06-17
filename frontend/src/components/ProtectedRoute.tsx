@@ -11,7 +11,7 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
       <div className="min-h-screen flex items-center justify-center paper" data-testid="auth-loading">
         <div className="flex items-center gap-3 text-muted-foreground">
           <Feather className="w-5 h-5 animate-pulse" strokeWidth={1.25} />
-          <span className="font-serif text-xl italic">Yükleniyor…</span>
+          <span className="font-serif text-xl">Yükleniyor…</span>
         </div>
       </div>
     );

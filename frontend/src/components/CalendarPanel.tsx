@@ -74,7 +74,7 @@ export default function CalendarPanel({ year, month, onChangeMonth, counts, sele
               {d}
               {count > 0 && (
                 <span
-                  className={`absolute top-0.5 right-0.5 min-w-[14px] h-[14px] px-1 flex items-center justify-center text-[9px] font-serif italic rounded-full
+                  className={`absolute top-0.5 right-0.5 min-w-[14px] h-[14px] px-1 flex items-center justify-center text-[9px] font-mono rounded-full
                     ${isSelected ? "bg-background text-foreground" : "bg-[hsl(var(--accent-tag))] text-white"}`}
                   data-testid={`cal-badge-${iso}`}
                 >

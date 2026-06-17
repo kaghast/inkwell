@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Manrope:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Geist:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
   --background: 42 25% 97%;          /* #FAF9F6 */
@@ -61,15 +61,18 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+  font-family: 'Geist', system-ui, -apple-system, sans-serif;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.01em;
 }
 
-.font-serif { font-family: 'Cormorant Garamond', Georgia, serif; }
+/* Display font alias — kept as `.font-serif` for minimal churn but now points
+   to a modern grotesk display face (no serifs). */
+.font-serif { font-family: 'Bricolage Grotesque', 'Geist', system-ui, sans-serif; font-feature-settings: 'ss01' on, 'ss02' on; letter-spacing: -0.02em; }
+.font-display { font-family: 'Bricolage Grotesque', 'Geist', system-ui, sans-serif; letter-spacing: -0.02em; }
 .font-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
 /* Subtle paper grain */
@@ -104,18 +107,52 @@ body {
   text-decoration: none;
 }
 
-.prose-paper h1 { font-family: 'Cormorant Garamond', serif; font-size: 2rem; font-weight: 600; margin: 1rem 0 0.5rem; letter-spacing: -0.02em; }
-.prose-paper h2 { font-family: 'Cormorant Garamond', serif; font-size: 1.6rem; font-weight: 600; margin: 0.875rem 0 0.5rem; }
-.prose-paper h3 { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; font-weight: 600; margin: 0.75rem 0 0.4rem; }
-.prose-paper p { margin: 0.5rem 0; line-height: 1.7; }
+.prose-paper h1 { font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.75rem; font-weight: 600; margin: 1rem 0 0.5rem; letter-spacing: -0.025em; }
+.prose-paper h2 { font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.4rem; font-weight: 600; margin: 0.875rem 0 0.5rem; letter-spacing: -0.02em; }
+.prose-paper h3 { font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.15rem; font-weight: 600; margin: 0.75rem 0 0.4rem; letter-spacing: -0.015em; }
+.prose-paper p { margin: 0.5rem 0; line-height: 1.65; }
 .prose-paper ul, .prose-paper ol { margin: 0.5rem 0; padding-left: 1.5rem; }
 .prose-paper li { margin: 0.25rem 0; }
-.prose-paper code { font-family: 'JetBrains Mono', monospace; background: hsl(var(--muted)); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
-.prose-paper pre { background: hsl(var(--muted)); padding: 1rem; border-radius: 4px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; }
+.prose-paper code { font-family: 'JetBrains Mono', monospace; background: hsl(var(--muted)); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.88em; }
+.prose-paper pre { background: hsl(var(--muted)); padding: 1rem; border-radius: 6px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.88rem; }
 .prose-paper pre code { background: transparent; padding: 0; }
-.prose-paper blockquote { border-left: 2px solid hsl(var(--accent-tag)); padding-left: 1rem; color: hsl(var(--muted-foreground)); font-style: italic; margin: 0.75rem 0; }
+.prose-paper blockquote { border-left: 2px solid hsl(var(--accent-tag)); padding-left: 1rem; color: hsl(var(--muted-foreground)); margin: 0.75rem 0; }
 .prose-paper a { color: hsl(var(--accent-tag)); text-decoration: underline; text-underline-offset: 2px; }
 .prose-paper hr { border: none; border-top: 1px solid hsl(var(--border)); margin: 1.5rem 0; }
+
+/* Modern note card */
+.note-card {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  padding: 1.25rem 1.4rem;
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+  position: relative;
+}
+.note-card:hover {
+  border-color: hsl(var(--foreground) / 0.18);
+  box-shadow: 0 1px 0 0 hsl(var(--foreground) / 0.04), 0 10px 30px -16px hsl(var(--foreground) / 0.18);
+}
+.dark .note-card:hover {
+  box-shadow: 0 1px 0 0 hsl(var(--foreground) / 0.06), 0 12px 30px -18px hsl(0 0% 0% / 0.6);
+}
+.note-card .note-meta-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.note-card .note-meta-pill:hover {
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--foreground));
+}
+.note-card .note-meta-pill[data-active="true"] {
+  background: hsl(var(--accent-tag) / 0.14);
+  color: hsl(var(--accent-tag));
+}
 
 /* Leaflet container override */
 .leaflet-container {

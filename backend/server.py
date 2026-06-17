@@ -151,6 +151,7 @@ class NoteIn(BaseModel):
     content: str = ""
     date: Optional[str] = None  # ISO date YYYY-MM-DD
     location_id: Optional[str] = None
+    created_at: Optional[str] = None  # ISO datetime override
 
 
 class NoteOut(BaseModel):
@@ -487,6 +488,12 @@ async def update_note(note_id: str, payload: NoteIn, user: dict = Depends(get_cu
         "location_id": payload.location_id,
         "updated_at": datetime.now(timezone.utc),
     }
+    if payload.created_at:
+        try:
+            iso = payload.created_at.replace("Z", "+00:00")
+            update["created_at"] = datetime.fromisoformat(iso)
+        except ValueError:
+            pass
     await db.notes.update_one({"note_id": note_id, "user_id": user_id}, {"$set": update})
     note = await db.notes.find_one({"note_id": note_id}, {"_id": 0})
     return note

@@ -66,7 +66,7 @@ export default function NoteComposer({ defaultDate, locations, onCreated, onLoca
         className="w-full text-left border border-dashed border-border rounded-sm px-5 py-4 text-muted-foreground hover:border-foreground/40 hover:text-foreground transition-colors flex items-center gap-2"
       >
         <Plus className="w-4 h-4" strokeWidth={1.25} />
-        <span className="font-serif italic text-lg">Bugüne bir şeyler yaz...</span>
+        <span className="font-serif text-lg tracking-tight">Bugüne bir şeyler yaz...</span>
       </button>
     );
   }

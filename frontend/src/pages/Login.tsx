@@ -61,7 +61,7 @@ export default function Login() {
           <p className="text-xs tracking-[0.3em] uppercase text-muted-foreground mb-4">Bir günlük, bir defter</p>
           <h1 className="font-serif text-5xl lg:text-6xl leading-[0.95] tracking-tight">
             Düşüncelerinizi<br />
-            <em className="text-[hsl(var(--accent-tag))]">mürekkep</em> gibi
+            <span className="text-[hsl(var(--accent-tag))]">mürekkep</span> gibi
             <br />kâğıda dökün.
           </h1>
           <p className="mt-6 text-muted-foreground max-w-md leading-relaxed">
