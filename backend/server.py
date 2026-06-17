@@ -92,9 +92,11 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
 
 
 def clear_auth_cookies(response: Response):
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("refresh_token", path="/")
-    response.delete_cookie("session_token", path="/")
+    for name in ("access_token", "refresh_token", "session_token"):
+        response.set_cookie(
+            key=name, value="", max_age=0,
+            httponly=True, secure=True, samesite="none", path="/",
+        )
 
 
 # ---------------------------------------------------------------------------
