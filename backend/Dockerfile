@@ -2,11 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# jq ve C eklentilerinin derlenebilmesi için gerekli sistem kütüphaneleri
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
     python3-dev \
     libffi-dev \
+    libonig-dev \
+    libtool \
+    automake \
+    autoconf \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
