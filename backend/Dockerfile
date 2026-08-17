@@ -2,7 +2,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Derleme ve bağımlılıklar için gerekli sistem paketleri
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
@@ -13,10 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt ./
 
-# Pip güncellemesi ve paket kurulumu
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir httpx
+    pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
