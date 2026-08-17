@@ -9,7 +9,7 @@ import TopBar from "@/components/TopBar";
 import SearchBar, { FilterChip } from "@/components/SearchBar";
 import PinnedNotesPanel from "@/components/PinnedNotesPanel";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { Hash, AtSign, MapPin } from "lucide-react";
+import { Hash, AtSign, MapPin, Search } from "lucide-react";
 import { FilterProvider, FilterType } from "@/contexts/FilterContext";
 import { toast } from "sonner";
 import type { Note, Tag, Person, LocationItem, CalendarCounts, DashboardMode } from "@/types";
@@ -79,7 +79,15 @@ export default function Dashboard({ mode = "day" }: Props) {
 
   const fetchNotes = useCallback(async () => {
     const queryParams: Record<string, any> = {};
-    if (mode === "day") queryParams.date = selectedDate;
+    // In "day" mode, only pin the date filter when NO free-text search and NO extra
+    // chip filters are active. As soon as the user types or Ctrl+clicks, we go
+    // universal (search across every note the user owns).
+    const hasExtras =
+      extras.q.trim().length > 0 ||
+      extras.tags.length > 0 ||
+      extras.people.length > 0 ||
+      extras.locationIds.length > 0;
+    if (mode === "day" && !hasExtras) queryParams.date = selectedDate;
 
     // Combine route-based primary filter with extras (route filter is always included)
     const allTags = [...extras.tags];
@@ -231,6 +239,21 @@ export default function Dashboard({ mode = "day" }: Props) {
     }
     const d = new Date(selectedDate + "T00:00:00");
     const dayLabel = d.toLocaleDateString("tr-TR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    const isSearching = extras.q.trim().length > 0 ||
+      extras.tags.length > 0 || extras.people.length > 0 || extras.locationIds.length > 0;
+    if (isSearching) {
+      return (
+        <div className="mb-6">
+          <div className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground mb-2 flex items-center gap-1.5">
+            <Search className="w-3 h-3" strokeWidth={1.5} /> Arama · tüm notlar
+          </div>
+          <h1 className="font-serif text-4xl sm:text-5xl tracking-tight" data-testid="search-heading">
+            {extras.q.trim() ? `"${extras.q.trim()}"` : "Filtrelenmiş"}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1 font-mono">{notes.length} sonuç</p>
+        </div>
+      );
+    }
     return (
       <div className="mb-6">
         <div className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground mb-2">Günce</div>
@@ -260,7 +283,7 @@ export default function Dashboard({ mode = "day" }: Props) {
               onRemoveChip={onRemoveChip}
             />
 
-            {mode === "day" && (
+            {mode === "day" && extras.q.trim().length === 0 && extras.tags.length === 0 && extras.people.length === 0 && extras.locationIds.length === 0 && (
               <div className="mb-6">
                 <NoteComposer
                   defaultDate={selectedDate}

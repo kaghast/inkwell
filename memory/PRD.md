@@ -23,6 +23,7 @@ Aşağıdaki özelliklere sahip bir not uygulaması yap. SAS projesi olacak:
 - **Data model**: `users`, `notes`, `tags`, `people`, `locations`, `user_sessions`; user-scoped via `user_id`; tag/person extraction from note content via Unicode regex on `#` / `@`.
 
 ## Implemented (2026-02-17) — additions
+- ✅ Universal full-text search: when the user types in the search box (or adds a filter chip) while in day mode, the date filter is dropped and results span every note the user owns. Header switches to `ARAMA · TÜM NOTLAR` with the query as h1 and a `sonuç` count. Composer hidden during search.
 - ✅ Task toggle checkbox with loading spinner (Loader2) inside MarkdownView
 - ✅ Race-condition guard: single pending toggle at a time (`pendingIdx`)
 - ✅ Stable task-index mapping via `node.position.start.line` (fixes StrictMode double-invoke off-by-one bug where clicking task 0 toggled task 1)
@@ -46,7 +47,6 @@ Aşağıdaki özelliklere sahip bir not uygulaması yap. SAS projesi olacak:
 2. **Bilgi işçisi** — markdown notlarını @kişi ve #proje ile organize eden çalışan
 
 ## P0 / P1 Backlog
-- P1: Universal full-text search across notes
 - P1: Export to Markdown/JSON
 - P1: Note sharing (read-only public URL)
 - P2: Pagination params (currently hard cap 500)
