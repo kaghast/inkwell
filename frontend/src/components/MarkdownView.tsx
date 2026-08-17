@@ -1,10 +1,10 @@
-import React, { ReactNode, useEffect, useState } from "react";
+import React, { ReactNode, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link } from "react-router-dom";
 import { useFilter } from "@/contexts/FilterContext";
 import api from "@/lib/api";
-import { BellRing, MapPin, Youtube, Check } from "lucide-react";
+import { BellRing, MapPin, Youtube, Check, Loader2 } from "lucide-react";
 import { isGmap, isYoutube, extractYoutubeId } from "@/lib/blocks";
 import { toast } from "sonner";
 
@@ -227,40 +227,86 @@ function CodeRenderer(props: any) {
 
 interface Props {
   content: string;
-  onTaskToggle?: (index: number, checked: boolean) => void;
+  onTaskToggle?: (index: number, checked: boolean) => void | Promise<void>;
 }
 
 export default function MarkdownView({ content, onTaskToggle }: Props) {
-  // Track task index across the whole doc
-  let taskCounter = { i: 0 };
+  // Build a stable line-number -> task-index map from the raw markdown.
+  // This avoids relying on a mutable counter during render (which was
+  // being double-incremented by ReactMarkdown's internal invocations
+  // and produced off-by-one bugs where clicking task 0 toggled task 1).
+  const taskLineToIdx = useMemo(() => {
+    const map = new Map<number, number>();
+    let idx = 0;
+    (content || "").split("\n").forEach((line, i) => {
+      if (/^\s*- \[[ xX]\]\s/.test(line)) {
+        map.set(i + 1, idx++); // remark positions are 1-based
+      }
+    });
+    return map;
+  }, [content]);
+
+  const [pendingIdx, setPendingIdx] = useState<number | null>(null);
+
+  async function handleTaskClick(idx: number, next: boolean) {
+    if (pendingIdx !== null) return; // guard against double-clicks / racing
+    if (!onTaskToggle) return;
+    setPendingIdx(idx);
+    try {
+      await Promise.resolve(onTaskToggle(idx, next));
+    } finally {
+      setPendingIdx(null);
+    }
+  }
+
   return (
     <div className="prose-paper" data-testid="markdown-view">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           p: ParagraphRenderer as any,
-          li: ({ children, ...rest }: any) => {
-            // GFM task list: children starts with a checkbox input
-            const first = Array.isArray(children) ? children[0] : children;
-            if (React.isValidElement(first) && (first as any).props?.type === "checkbox") {
-              const myIdx = taskCounter.i++;
-              const checked = !!(first as any).props?.checked;
+          li: ({ children, className, node, ...rest }: any) => {
+            // GFM task list: react-markdown adds className="task-list-item"
+            // and prepends a disabled <input type="checkbox"> to children.
+            const isTaskItem = typeof className === "string" && className.includes("task-list-item");
+            const kids = Array.isArray(children) ? children : [children];
+            if (isTaskItem) {
+              const line: number | undefined = node?.position?.start?.line;
+              const myIdx = line != null && taskLineToIdx.has(line) ? (taskLineToIdx.get(line) as number) : 0;
+              // Find the checkbox in children and read its checked state
+              let checked = false;
+              const rest_children: React.ReactNode[] = [];
+              for (const c of kids) {
+                if (React.isValidElement(c) && (c as any).props && (c as any).props.type === "checkbox") {
+                  checked = !!(c as any).props.checked;
+                } else {
+                  rest_children.push(c);
+                }
+              }
+              const isPending = pendingIdx === myIdx;
+              const disabled = pendingIdx !== null;
               return (
                 <li className="flex items-start gap-2 list-none -ml-6" data-testid={`task-item-${myIdx}`}>
                   <button
                     type="button"
-                    onClick={() => onTaskToggle?.(myIdx, !checked)}
-                    className={`mt-1 w-4 h-4 rounded-sm border flex items-center justify-center transition-colors ${checked ? "bg-[hsl(var(--accent-tag))] border-[hsl(var(--accent-tag))]" : "border-border hover:border-foreground/40"}`}
+                    onClick={() => handleTaskClick(myIdx, !checked)}
+                    disabled={disabled}
+                    className={`mt-1 w-4 h-4 rounded-sm border flex items-center justify-center transition-colors ${checked ? "bg-[hsl(var(--accent-tag))] border-[hsl(var(--accent-tag))]" : "border-border hover:border-foreground/40"} ${disabled ? "opacity-70 cursor-wait" : ""}`}
                     data-testid={`task-toggle-${myIdx}`}
                     aria-label={checked ? "İşareti kaldır" : "İşaretle"}
+                    aria-busy={isPending}
                   >
-                    {checked && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
+                    {isPending ? (
+                      <Loader2 className={`w-3 h-3 animate-spin ${checked ? "text-white" : "text-muted-foreground"}`} strokeWidth={2} />
+                    ) : checked ? (
+                      <Check className="w-3 h-3 text-white" strokeWidth={3} />
+                    ) : null}
                   </button>
-                  <span className={checked ? "line-through text-muted-foreground" : ""}>{transformChildren(Array.isArray(children) ? children.slice(1) : [])}</span>
+                  <span className={checked ? "line-through text-muted-foreground" : ""}>{transformChildren(rest_children)}</span>
                 </li>
               );
             }
-            return <li {...rest}>{transformChildren(children)}</li>;
+            return <li {...rest} className={className}>{transformChildren(children)}</li>;
           },
           h1: ({ children }: any) => <h1>{transformChildren(children)}</h1>,
           h2: ({ children }: any) => <h2>{transformChildren(children)}</h2>,

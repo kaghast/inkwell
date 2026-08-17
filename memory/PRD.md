@@ -22,6 +22,12 @@ Aşağıdaki özelliklere sahip bir not uygulaması yap. SAS projesi olacak:
 - **Auth**: dual flow — JWT httpOnly cookies (access 1d + refresh 7d) for email/password, Emergent Google OAuth exchanging session_id → session_token + JWT cookies
 - **Data model**: `users`, `notes`, `tags`, `people`, `locations`, `user_sessions`; user-scoped via `user_id`; tag/person extraction from note content via Unicode regex on `#` / `@`.
 
+## Implemented (2026-02-17) — additions
+- ✅ Task toggle checkbox with loading spinner (Loader2) inside MarkdownView
+- ✅ Race-condition guard: single pending toggle at a time (`pendingIdx`)
+- ✅ Stable task-index mapping via `node.position.start.line` (fixes StrictMode double-invoke off-by-one bug where clicking task 0 toggled task 1)
+- ✅ Verified `/tag/:name`, `/person/:name`, `/location/:id` URLs load with pre-applied locked chips + custom h1 heading
+
 ## Implemented (2026-02-17)
 - ✅ Auth: register/login/me/logout, Emergent Google session exchange
 - ✅ Notes CRUD with #tag/@person auto-extraction; date/tag/person/location filters
