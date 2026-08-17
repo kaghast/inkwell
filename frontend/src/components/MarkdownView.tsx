@@ -6,6 +6,7 @@ import { useFilter } from "@/contexts/FilterContext";
 import api from "@/lib/api";
 import { BellRing, MapPin, Youtube, Check, Loader2 } from "lucide-react";
 import { isGmap, isYoutube, extractYoutubeId } from "@/lib/blocks";
+import { highlightText } from "@/lib/highlight";
 import { toast } from "sonner";
 
 const TAG_RE = /(^|\s)#([\w\-_ğüşıöçĞÜŞİÖÇ]+)/gu;
@@ -37,7 +38,7 @@ function MentionLink({ name }: { name: string }) {
   );
 }
 
-function transformChildren(children: ReactNode): ReactNode[] {
+function transformChildren(children: ReactNode, highlight?: string): ReactNode[] {
   const arr = Array.isArray(children) ? children : [children];
   const out: ReactNode[] = [];
   arr.forEach((child, idx) => {
@@ -76,6 +77,12 @@ function transformChildren(children: ReactNode): ReactNode[] {
       if (last < p.length) parts.push(p.slice(last));
       return parts;
     });
+    if (highlight && highlight.trim()) {
+      pieces = pieces.flatMap((p, i) => {
+        if (typeof p !== "string") return [p];
+        return highlightText(p, highlight, `hl-${idx}-${i}`);
+      });
+    }
     out.push(...pieces);
   });
   return out;
@@ -228,9 +235,10 @@ function CodeRenderer(props: any) {
 interface Props {
   content: string;
   onTaskToggle?: (index: number, checked: boolean) => void | Promise<void>;
+  highlight?: string;
 }
 
-export default function MarkdownView({ content, onTaskToggle }: Props) {
+export default function MarkdownView({ content, onTaskToggle, highlight }: Props) {
   // Build a stable line-number -> task-index map from the raw markdown.
   // This avoids relying on a mutable counter during render (which was
   // being double-incremented by ReactMarkdown's internal invocations
