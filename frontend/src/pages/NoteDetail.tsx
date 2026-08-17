@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
 import TopBar from "@/components/TopBar";
 import MarkdownEditor from "@/components/MarkdownEditor";
-import MarkdownView from "@/components/MarkdownView";
+import MarkdownView, { toggleTaskInMarkdown } from "@/components/MarkdownView";
 import MiniMap from "@/components/MiniMap";
 import LocationPicker from "@/components/LocationPicker";
 import { Button } from "@/components/ui/button";
@@ -183,7 +183,21 @@ export default function NoteDetail() {
               </div>
             )}
 
-            <MarkdownView content={note.content} />
+            <MarkdownView
+              content={note.content}
+              onTaskToggle={async (idx, checked) => {
+                const newContent = toggleTaskInMarkdown(note.content, idx, checked);
+                try {
+                  const { data } = await api.put<Note>(`/notes/${id}`, {
+                    title: note.title,
+                    content: newContent,
+                    date: note.date,
+                    location_id: note.location_id,
+                  });
+                  setNote(data);
+                } catch { toast.error("Güncellenemedi"); }
+              }}
+            />
           </>
         )}
       </main>

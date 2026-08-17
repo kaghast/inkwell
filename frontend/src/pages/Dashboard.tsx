@@ -7,6 +7,7 @@ import NoteCard from "@/components/NoteCard";
 import NoteComposer from "@/components/NoteComposer";
 import TopBar from "@/components/TopBar";
 import SearchBar, { FilterChip } from "@/components/SearchBar";
+import PinnedNotesPanel from "@/components/PinnedNotesPanel";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Hash, AtSign, MapPin } from "lucide-react";
 import { FilterProvider, FilterType } from "@/contexts/FilterContext";
@@ -40,6 +41,7 @@ export default function Dashboard({ mode = "day" }: Props) {
   const [locations, setLocations] = useState<LocationItem[]>([]);
   const [calCounts, setCalCounts] = useState<CalendarCounts>({});
   const [extras, setExtras] = useState<ExtraFilters>(emptyExtras);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Reset extras when navigating between modes/routes so chips don't leak across pages.
   useEffect(() => { setExtras(emptyExtras); }, [mode, params.name, params.id]);
@@ -123,12 +125,14 @@ export default function Dashboard({ mode = "day" }: Props) {
     fetchNotes();
     fetchCalendar(calMonth.year, calMonth.month);
     fetchAux();
+    setRefreshKey((k) => k + 1);
   }
 
   function onNoteCreated() {
     fetchNotes();
     fetchCalendar(calMonth.year, calMonth.month);
     fetchAux();
+    setRefreshKey((k) => k + 1);
   }
 
   // ---- FilterContext: handle Ctrl/Cmd+click anywhere
@@ -280,7 +284,7 @@ export default function Dashboard({ mode = "day" }: Props) {
                     locationMap={locationMap}
                     locations={locations}
                     onDelete={onDeleteNote}
-                    onChanged={() => { fetchNotes(); fetchCalendar(calMonth.year, calMonth.month); fetchAux(); }}
+                    onChanged={() => { fetchNotes(); fetchCalendar(calMonth.year, calMonth.month); fetchAux(); setRefreshKey((k) => k + 1); }}
                     onLocationsChanged={fetchAux}
                   />
                 ))
@@ -288,7 +292,8 @@ export default function Dashboard({ mode = "day" }: Props) {
             </div>
           </main>
 
-          <div className="hidden lg:block border-l border-border min-h-0 overflow-hidden">
+          <div className="hidden lg:block border-l border-border min-h-0 overflow-y-auto">
+            <PinnedNotesPanel reloadKey={refreshKey} />
             <CalendarPanel
               year={calMonth.year}
               month={calMonth.month}
@@ -306,7 +311,8 @@ export default function Dashboard({ mode = "day" }: Props) {
           </SheetContent>
         </Sheet>
         <Sheet open={rightOpen} onOpenChange={setRightOpen}>
-          <SheetContent side="right" className="w-[320px] p-0 bg-background border-border" data-testid="mobile-calendar">
+          <SheetContent side="right" className="w-[320px] p-0 bg-background border-border overflow-y-auto" data-testid="mobile-calendar">
+            <PinnedNotesPanel reloadKey={refreshKey} />
             <CalendarPanel
               year={calMonth.year}
               month={calMonth.month}

@@ -1,0 +1,44 @@
+{
+  "summary": "Backend-only testing for Inkwell new features (block editor extras). Wrote 18 pytest cases in /app/backend/tests/test_new_features.py covering: (1) reminder fenced-block extraction on POST/PUT/DELETE with cross-note sync, upcoming ordering asc, past-reminder exclusion, fire endpoint marks fired and disappears from upcoming, 404 on unknown reminder; (2) pin toggle PATCH + pinned=true/false/omitted list filtering + 404 on missing note; (3) image upload multipart accepts PNG (returns file_id, url, content_type, size), rejects non-image (400), requires auth (401), file download returns bytes with correct content-type and cross-user isolation returns 404; (4) link-preview against github.com returns non-empty og:title (with site_name/image keys), unreachable domain falls back gracefully with title==url (no 500), invalid scheme returns 400; (5) geocode Photon proxy for 'Galata Kulesi' returns list with float lat/lng in Istanbul bounding box. All 18 new tests PASS against external preview URL. Regression suite (test_inkwell_backend.py + test_notes_search_filters.py) = 33/35 pass; the 2 failures are the SAME pre-existing test-fixture idempotency bugs already documented in iteration_1 and iteration_2 (test_rename_tag_updates_notes / test_rename_person_updates_notes hardcode target names that already exist from prior runs → correct 400 conflict). NOT product bugs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/link-preview", "issue": "For a 4xx/5xx upstream (r.status_code >= 400) the code raises HTTPException(502), so a broken URL that resolves but returns 404 will bubble up as a 502 to the client instead of the graceful {title: url} fallback used for network errors. Consider catching this and returning the same graceful shape for a consistent client contract."},
+      {"endpoint": "GET /api/geocode", "issue": "In-memory _geocode_cache is unbounded (never trimmed). Under sustained traffic it can grow indefinitely. Consider capping (e.g., functools.lru_cache-style eviction) or setting a max-entry cap alongside TTL. Same concern applies to _link_cache."},
+      {"endpoint": "POST /api/uploads/image", "issue": "Only content-type is validated (`startswith('image/')`). Magic-byte sniffing (e.g., Pillow.open) would prevent a client faking Content-Type. Also filename extension is derived from user input without whitelist — low risk since path is server-generated, but worth noting."},
+      {"endpoint": "GET /api/reminders/upcoming", "issue": "Default within_hours = 24*30 = 720h (30 days). Not documented; a note created with a reminder in 40 days will not appear until 10 days pass. Consider documenting or extending default."},
+      {"endpoint": "POST /api/reminders/{id}/fire", "issue": "No idempotency signal — firing an already-fired reminder returns 200 silently. Acceptable, but consider returning current fired state."},
+      {"endpoint": "sync_reminders", "issue": "delete_many + insert_many is not atomic. If insert_many fails after delete, note loses reminders. Low risk (single-writer per note), but a session/transaction would be safer."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/test_reports/pytest/pytest_new_features.xml",
+    "/app/test_reports/pytest/pytest_regression_iter3.xml"
+  ],
+  "action_items": [
+    "Make rename-propagation tests idempotent (uuid-suffix target names) in /app/backend/tests/test_inkwell_backend.py — carried over from iteration_1/2, still failing on re-run.",
+    "Optional: return graceful {title: url} fallback in /api/link-preview when upstream returns 4xx/5xx (currently raises 502).",
+    "Optional: cap in-memory _link_cache and _geocode_cache size to prevent unbounded growth.",
+    "Optional: sniff magic bytes on /api/uploads/image in addition to content-type header."
+  ],
+  "critical_code_review_comments": [
+    "REMINDER_RE is anchored with ```reminder\\s*\\n<iso>\\n<text>\\n?``` — correctly handles the documented fence format including trailing newline being optional; verified via the ordering + update-replace tests.",
+    "sync_reminders wipes-then-writes on every create/update — simple and correct. But not atomic; if insert_many fails mid-way, note loses reminders (see minor).",
+    "toggle_pin updates only pinned+updated_at but returns the pre-update note object with pinned mutated in memory — correct, but note that other concurrent updates between find_one and update_one are not reflected. Low risk single-user.",
+    "upload_image path is `inkwell/uploads/<user_id>/<uuid>.<ext>` — good tenancy separation on storage. `ext` split is bounded to 8 chars — good.",
+    "download_file checks user_id + is_deleted — correct cross-user isolation (verified in test_files_cross_user_isolation).",
+    "link_preview catches all exceptions and returns fallback for network failures, but explicitly re-raises HTTPException for upstream 4xx/5xx → clients get inconsistent behavior between network error (200 fallback) and HTTP error (502).",
+    "geocode filters lat/lon None; converts to float; caches per (q,limit) — solid. But cache dict has no eviction.",
+    "server.py is now 1040 lines — nearing the 700-line refactor threshold from code review guidelines. Consider splitting into modules (auth, notes, reminders, files, integrations)."
+  ],
+  "updated_files": ["/app/backend/tests/test_new_features.py"],
+  "success_rate": {"backend": "100% on new features (18/18); 33/35 on full regression (2 pre-existing test-idempotency failures unrelated to new code)", "frontend": "N/A"},
+  "test_credentials": "test@inkwell.app/test12345 (auto-registered if missing), admin@inkwell.app/admin12345",
+  "seed_data_creation": "Tests create ephemeral notes with reminders and pin state, then delete them within the test. Uploaded PNG files (3 x 68-byte pixels) are left in Emergent object storage under inkwell/uploads/<user_id>/ (no delete endpoint tested).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Reminder fence format is EXACTLY ```reminder\\n<ISO with Z or offset>\\n<text>\\n``` — server strips + tolerates optional trailing newline before ```. Upload endpoint requires cookies (session) OR Bearer token AND must NOT send Content-Type: application/json header — strip it when using requests multipart. /api/link-preview returns graceful fallback for network errors but 502 for upstream HTTP errors — noted as minor. Default within_hours for /api/reminders/upcoming is 720h (30 days); if testing with far-future reminders (>30d) pass ?within_hours=. Two pre-existing rename tests in test_inkwell_backend.py fail on re-run due to hardcoded target names — NOT a bug. Use /app/backend/tests/test_new_features.py as authoritative regression for the new features.",
+  "rca of the issue": "N/A — no product bugs found. All 14 requested feature checks pass. The only failures are the same 2 test-fixture non-idempotency issues already documented in iteration_1 and iteration_2 (hardcoded rename targets)."
+}

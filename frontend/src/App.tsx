@@ -8,6 +8,14 @@ import AuthCallback from "@/pages/AuthCallback";
 import Dashboard from "@/pages/Dashboard";
 import NoteDetail from "@/pages/NoteDetail";
 import ProtectedRoute from "@/components/ProtectedRoute";
+import ReminderScheduler from "@/components/ReminderScheduler";
+import { useAuth } from "@/contexts/AuthContext";
+
+function GlobalReminders() {
+  const { user } = useAuth();
+  if (!user || !(user as any).user_id) return null;
+  return <ReminderScheduler />;
+}
 
 function AppRoutes() {
   const location = useLocation();
@@ -33,6 +41,7 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <AppRoutes />
+          <GlobalReminders />
           <Toaster
             position="bottom-right"
             toastOptions={{

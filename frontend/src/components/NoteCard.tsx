@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { MapPin, Calendar as CalIcon, Clock, Trash2, Save, X } from "lucide-react";
-import MarkdownView from "@/components/MarkdownView";
+import { MapPin, Calendar as CalIcon, Clock, Trash2, Save, X, Pin, PinOff } from "lucide-react";
+import MarkdownView, { toggleTaskInMarkdown } from "@/components/MarkdownView";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import LocationPicker from "@/components/LocationPicker";
 import { Button } from "@/components/ui/button";
@@ -104,6 +104,21 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
   async function onLocationPickExisting(locationId: string) {
     await patch({ location_id: locationId || null });
     toast.success("Konum güncellendi");
+  }
+
+  async function togglePin() {
+    try {
+      await api.patch(`/notes/${note.note_id}/pin`);
+      onChanged();
+      toast.success(note.pinned ? "Sabitleme kaldırıldı" : "Sabitlendi");
+    } catch {
+      toast.error("Güncellenemedi");
+    }
+  }
+
+  async function onTaskToggle(idx: number, checked: boolean) {
+    const newContent = toggleTaskInMarkdown(note.content, idx, checked);
+    await patch({ content: newContent });
   }
 
   async function saveEdit() {
@@ -218,6 +233,17 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
               Aç →
             </Link>
           )}
+          <Button
+            size="icon"
+            variant="ghost"
+            className={`h-7 w-7 ${note.pinned ? "text-[hsl(var(--accent-tag))]" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={togglePin}
+            data-testid={`note-pin-${note.note_id}`}
+            aria-label={note.pinned ? "Sabitlemeyi kaldır" : "Sabitle"}
+            title={note.pinned ? "Sabitlemeyi kaldır" : "Sabitle"}
+          >
+            {note.pinned ? <PinOff className="w-3.5 h-3.5" strokeWidth={1.5} /> : <Pin className="w-3.5 h-3.5" strokeWidth={1.5} />}
+          </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" data-testid={`note-delete-${note.note_id}`}>
@@ -274,7 +300,7 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
               </Link>
             </h2>
           )}
-          <MarkdownView content={note.content} />
+          <MarkdownView content={note.content} onTaskToggle={onTaskToggle} />
           <div className="mt-3 text-[10px] tracking-[0.15em] uppercase text-muted-foreground/60 font-mono select-none">
             Çift tıkla → düzenle
           </div>

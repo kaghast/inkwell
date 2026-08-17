@@ -43,6 +43,7 @@ export interface Note {
   tags: string[];
   people: string[];
   location_id?: string | null;
+  pinned?: boolean;
   created_at: string;
   updated_at: string;
 }

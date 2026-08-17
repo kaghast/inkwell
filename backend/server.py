@@ -11,10 +11,12 @@ import logging
 import bcrypt
 import jwt
 import httpx
+import requests
+from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, Query, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
@@ -164,6 +166,7 @@ class NoteOut(BaseModel):
     tags: List[str]
     people: List[str]
     location_id: Optional[str] = None
+    pinned: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -395,6 +398,50 @@ def today_iso() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+# ---- Reminders parsing/sync
+REMINDER_RE = re.compile(
+    r"```reminder\s*\n([^\n]+)\n([\s\S]*?)\n?```",
+    re.IGNORECASE,
+)
+
+
+def extract_reminders(content: str) -> List[dict]:
+    """Extract ``` reminder\\n<iso>\\n<text>\\n``` fenced blocks."""
+    out: List[dict] = []
+    for m in REMINDER_RE.finditer(content or ""):
+        iso = m.group(1).strip()
+        text = (m.group(2) or "").strip()
+        try:
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        out.append({"at": dt, "text": text or "Hatırlatma"})
+    return out
+
+
+async def sync_reminders(user_id: str, note_id: str, content: str):
+    """Replace all reminders for this note based on extracted fenced blocks."""
+    await db.reminders.delete_many({"user_id": user_id, "note_id": note_id})
+    extracted = extract_reminders(content)
+    if not extracted:
+        return
+    docs = []
+    for r in extracted:
+        docs.append({
+            "reminder_id": f"rem_{uuid.uuid4().hex[:12]}",
+            "user_id": user_id,
+            "note_id": note_id,
+            "at": r["at"],
+            "text": r["text"],
+            "fired": False,
+            "created_at": datetime.now(timezone.utc),
+        })
+    if docs:
+        await db.reminders.insert_many(docs)
+
+
 # ---- Notes
 @api_router.post("/notes", response_model=NoteOut)
 async def create_note(payload: NoteIn, user: dict = Depends(get_current_user)):
@@ -416,10 +463,12 @@ async def create_note(payload: NoteIn, user: dict = Depends(get_current_user)):
         "tags": tags,
         "people": people,
         "location_id": payload.location_id,
+        "pinned": False,
         "created_at": now,
         "updated_at": now,
     }
     await db.notes.insert_one(doc)
+    await sync_reminders(user_id, note_id, content)
     doc.pop("_id", None)
     return doc
 
@@ -434,11 +483,16 @@ async def list_notes(
     people: List[str] = Query(default_factory=list),
     location_ids: List[str] = Query(default_factory=list),
     q: Optional[str] = None,
+    pinned: Optional[bool] = None,
     user: dict = Depends(get_current_user),
 ):
     qf: dict = {"user_id": user["user_id"]}
     if date:
         qf["date"] = date
+    if pinned is True:
+        qf["pinned"] = True
+    elif pinned is False:
+        qf["pinned"] = {"$ne": True}
 
     all_tags = list({t.lower() for t in tags} | ({tag.lower()} if tag else set()))
     if len(all_tags) == 1:
@@ -516,7 +570,19 @@ async def update_note(note_id: str, payload: NoteIn, user: dict = Depends(get_cu
         except ValueError:
             pass
     await db.notes.update_one({"note_id": note_id, "user_id": user_id}, {"$set": update})
+    await sync_reminders(user_id, note_id, content)
     note = await db.notes.find_one({"note_id": note_id}, {"_id": 0})
+    return note
+
+
+@api_router.patch("/notes/{note_id}/pin", response_model=NoteOut)
+async def toggle_pin(note_id: str, user: dict = Depends(get_current_user)):
+    note = await db.notes.find_one({"note_id": note_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not note:
+        raise HTTPException(404, "Not found")
+    new_val = not bool(note.get("pinned", False))
+    await db.notes.update_one({"note_id": note_id}, {"$set": {"pinned": new_val, "updated_at": datetime.now(timezone.utc)}})
+    note["pinned"] = new_val
     return note
 
 
@@ -525,6 +591,7 @@ async def delete_note(note_id: str, user: dict = Depends(get_current_user)):
     res = await db.notes.delete_one({"note_id": note_id, "user_id": user["user_id"]})
     if res.deleted_count == 0:
         raise HTTPException(404, "Not found")
+    await db.reminders.delete_many({"note_id": note_id, "user_id": user["user_id"]})
     return {"ok": True}
 
 
@@ -679,6 +746,252 @@ async def root():
     return {"ok": True, "service": "inkwell"}
 
 
+# ---- Geocoding proxy (Photon / Komoot — OpenStreetMap based, no UA requirement, CORS enabled)
+# Proxied through backend for caching + uniform response shape.
+_geocode_cache: dict[str, tuple[float, list[dict]]] = {}
+_GEOCODE_TTL = 600  # 10 minutes
+
+
+@api_router.get("/geocode")
+async def geocode(q: str, limit: int = 6, user: dict = Depends(get_current_user)):
+    key = f"{q.strip().lower()}|{limit}"
+    now = datetime.now(timezone.utc).timestamp()
+    cached = _geocode_cache.get(key)
+    if cached and now - cached[0] < _GEOCODE_TTL:
+        return cached[1]
+    if not q.strip():
+        return []
+    url = "https://photon.komoot.io/api/"
+    params = {
+        "q": q,
+        "limit": max(1, min(limit, 10)),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; InkwellNotes/1.0; +https://inkwell.app)",
+            "Accept": "application/json",
+            "Accept-Language": "tr,en;q=0.8",
+        }) as http:
+            r = await http.get(url, params=params)
+        if r.status_code != 200:
+            logging.warning("Photon upstream %s: %s", r.status_code, r.text[:200])
+            raise HTTPException(status_code=502, detail="Geocoding upstream error")
+        body = r.json() or {}
+        feats = body.get("features", []) or []
+        out = []
+        for f in feats:
+            props = f.get("properties", {}) or {}
+            geom = f.get("geometry", {}) or {}
+            coords = geom.get("coordinates") or [None, None]
+            lon, lat = coords[0], coords[1]
+            if lat is None or lon is None:
+                continue
+            # Build a friendly display label
+            name = props.get("name") or ""
+            parts = [
+                name,
+                props.get("street"),
+                props.get("city") or props.get("county"),
+                props.get("state"),
+                props.get("country"),
+            ]
+            display_name = ", ".join([p for p in parts if p])
+            out.append({
+                "display_name": display_name or name or "—",
+                "name": name,
+                "lat": float(lat),
+                "lng": float(lon),
+                "type": props.get("type"),
+                "osm_key": props.get("osm_key"),
+            })
+        _geocode_cache[key] = (now, out)
+        _cache_trim(_geocode_cache)
+        return out
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Geocoding upstream error")
+
+
+# ---- File uploads (Emergent object storage)
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+APP_NAME = "inkwell"
+
+_storage_key: Optional[str] = None
+
+
+def init_storage() -> str:
+    """Call once at startup; returns cached session-scoped storage_key."""
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    if not EMERGENT_KEY:
+        raise RuntimeError("EMERGENT_LLM_KEY not set")
+    resp = requests.post(
+        f"{STORAGE_URL}/init",
+        json={"emergent_key": EMERGENT_KEY},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data, timeout=120,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str) -> tuple[bytes, str]:
+    key = init_storage()
+    resp = requests.get(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key}, timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
+@api_router.post("/uploads/image")
+async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only images allowed")
+    contents = await file.read()
+    max_size = 10 * 1024 * 1024
+    if len(contents) > max_size:
+        raise HTTPException(status_code=413, detail="Image too large (max 10 MB)")
+    ext = (file.filename or "img").split(".")[-1][:8] if "." in (file.filename or "") else "bin"
+    path = f"{APP_NAME}/uploads/{user['user_id']}/{uuid.uuid4().hex}.{ext}"
+    try:
+        result = put_object(path, contents, content_type)
+    except Exception as e:
+        logging.exception("Upload failed")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+    file_id = f"file_{uuid.uuid4().hex[:12]}"
+    await db.files.insert_one({
+        "file_id": file_id,
+        "user_id": user["user_id"],
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": content_type,
+        "size": result.get("size", len(contents)),
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc),
+    })
+    return {"file_id": file_id, "url": f"/api/files/{file_id}", "size": len(contents), "content_type": content_type}
+
+
+@api_router.get("/files/{file_id}")
+async def download_file(file_id: str, user: dict = Depends(get_current_user)):
+    rec = await db.files.find_one({"file_id": file_id, "user_id": user["user_id"], "is_deleted": False})
+    if not rec:
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        data, ctype = get_object(rec["storage_path"])
+    except Exception as e:
+        logging.exception("File fetch failed")
+        raise HTTPException(status_code=500, detail=f"Fetch failed: {e}")
+    return Response(content=data, media_type=rec.get("content_type") or ctype)
+
+
+# ---- Link preview (OpenGraph)
+_link_cache: dict[str, tuple[float, dict]] = {}
+_LINK_TTL = 24 * 60 * 60  # 1 day
+_CACHE_MAX_ENTRIES = 500
+
+
+def _cache_trim(cache: dict, max_entries: int = _CACHE_MAX_ENTRIES) -> None:
+    if len(cache) > max_entries:
+        # drop oldest ~10% by timestamp
+        drop = sorted(cache.items(), key=lambda kv: kv[1][0])[: max(1, max_entries // 10)]
+        for k, _ in drop:
+            cache.pop(k, None)
+
+
+def _pick_meta(soup, prop: str) -> Optional[str]:
+    tag = soup.find("meta", attrs={"property": prop}) or soup.find("meta", attrs={"name": prop})
+    if tag and tag.get("content"):
+        return tag["content"].strip()
+    return None
+
+
+@api_router.get("/link-preview")
+async def link_preview(url: str, user: dict = Depends(get_current_user)):
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "Invalid URL")
+    now = datetime.now(timezone.utc).timestamp()
+    cached = _link_cache.get(url)
+    if cached and now - cached[0] < _LINK_TTL:
+        return cached[1]
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; InkwellNotes/1.0)",
+            "Accept": "text/html,application/xhtml+xml",
+        }) as http:
+            r = await http.get(url)
+        if r.status_code >= 400:
+            # Graceful fallback so the client always gets a usable shape
+            result = {"url": url, "title": url, "description": None, "image": None, "site_name": None}
+            _link_cache[url] = (now, result)
+            return result
+        html = r.text[:200_000]
+        soup = BeautifulSoup(html, "lxml")
+        title = _pick_meta(soup, "og:title") or (soup.title.string.strip() if soup.title and soup.title.string else url)
+        desc = _pick_meta(soup, "og:description") or _pick_meta(soup, "description")
+        image = _pick_meta(soup, "og:image")
+        site = _pick_meta(soup, "og:site_name")
+        result = {
+            "url": url,
+            "title": title[:300] if title else url,
+            "description": (desc or "")[:500] or None,
+            "image": image,
+            "site_name": site,
+        }
+        _link_cache[url] = (now, result)
+        _cache_trim(_link_cache)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.warning("Link preview failed for %s: %s", url, e)
+        return {"url": url, "title": url, "description": None, "image": None, "site_name": None}
+
+
+# ---- Reminders
+@api_router.get("/reminders/upcoming")
+async def upcoming_reminders(within_hours: int = 24 * 30, user: dict = Depends(get_current_user)):
+    now = datetime.now(timezone.utc)
+    until = now + timedelta(hours=within_hours)
+    cursor = db.reminders.find(
+        {"user_id": user["user_id"], "at": {"$gte": now, "$lte": until}, "fired": False},
+        {"_id": 0},
+    ).sort("at", 1)
+    items = await cursor.to_list(200)
+    for it in items:
+        at = it.get("at")
+        if isinstance(at, datetime):
+            it["at"] = at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return items
+
+
+@api_router.post("/reminders/{reminder_id}/fire")
+async def mark_reminder_fired(reminder_id: str, user: dict = Depends(get_current_user)):
+    res = await db.reminders.update_one(
+        {"reminder_id": reminder_id, "user_id": user["user_id"]},
+        {"$set": {"fired": True, "fired_at": datetime.now(timezone.utc)}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
@@ -692,6 +1005,16 @@ async def startup():
     await db.people.create_index([("user_id", 1), ("name", 1)], unique=True)
     await db.locations.create_index("location_id", unique=True)
     await db.user_sessions.create_index("session_token", unique=True)
+    await db.reminders.create_index([("user_id", 1), ("at", 1)])
+    await db.reminders.create_index("reminder_id", unique=True)
+    await db.files.create_index("file_id", unique=True)
+
+    # Init object storage session key (safe to fail — uploads will just error)
+    try:
+        init_storage()
+        logging.info("Storage initialized")
+    except Exception as e:
+        logging.warning("Storage init failed: %s", e)
 
     # seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@inkwell.app").lower()
