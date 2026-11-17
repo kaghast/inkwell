@@ -6,6 +6,9 @@ import { Toaster } from "@/components/ui/sonner";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import NoteDetail from "@/pages/NoteDetail";
+import Settings from "@/pages/Settings";
+import Graph from "@/pages/Graph";
+import { AreasProvider } from "@/contexts/AreasContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import ReminderScheduler from "@/components/ReminderScheduler";
 import { useAuth } from "@/contexts/AuthContext";
@@ -25,7 +28,11 @@ function AppRoutes() {
       <Route path="/tag/:name" element={<ProtectedRoute><Dashboard mode="tag" /></ProtectedRoute>} />
       <Route path="/person/:name" element={<ProtectedRoute><Dashboard mode="person" /></ProtectedRoute>} />
       <Route path="/location/:id" element={<ProtectedRoute><Dashboard mode="location" /></ProtectedRoute>} />
+      <Route path="/area/:id" element={<ProtectedRoute><Dashboard mode="area" /></ProtectedRoute>} />
       <Route path="/note/:id" element={<ProtectedRoute><NoteDetail /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route path="/graph" element={<ProtectedRoute><Graph /></ProtectedRoute>} />
+      <Route path="/graph/area/:id" element={<ProtectedRoute><Graph /></ProtectedRoute>} />
     </Routes>
   );
 }
@@ -34,6 +41,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
+        <AreasProvider>
         <BrowserRouter>
           <AppRoutes />
           <GlobalReminders />
@@ -50,6 +58,7 @@ export default function App() {
             }}
           />
         </BrowserRouter>
+        </AreasProvider>
       </AuthProvider>
     </ThemeProvider>
   );

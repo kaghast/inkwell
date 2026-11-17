@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { MapPin, Calendar as CalIcon, Clock, Trash2, Save, X, Pin, PinOff } from "lucide-react";
+import { MapPin, Calendar as CalIcon, Clock, Trash2, Save, X, Pin, PinOff, Shapes } from "lucide-react";
 import MarkdownView, { toggleTaskInMarkdown } from "@/components/MarkdownView";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import LocationPicker from "@/components/LocationPicker";
+import AreaPicker from "@/components/AreaPicker";
+import { useAreas } from "@/contexts/AreasContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Calendar } from "@/components/ui/calendar";
@@ -45,6 +47,8 @@ interface Props {
 
 export default function NoteCard({ note, locationMap, locations, onDelete, onChanged, onLocationsChanged }: Props) {
   const loc = note.location_id ? locationMap[note.location_id] : null;
+  const { areaMap, reload: reloadAreas } = useAreas();
+  const noteAreas = (note.area_ids || []).map((id) => areaMap[id]).filter(Boolean);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(note.title);
   const [content, setContent] = useState(note.content);
@@ -59,7 +63,7 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
   const createdDate = new Date(note.created_at);
   const timeValue = `${String(createdDate.getHours()).padStart(2, "0")}:${String(createdDate.getMinutes()).padStart(2, "0")}`;
 
-  async function patch(payload: Partial<{ title: string; content: string; date: string; location_id: string | null; created_at: string }>) {
+  async function patch(payload: Partial<{ title: string; content: string; date: string; location_id: string | null; created_at: string; area_ids: string[] }>) {
     try {
       await api.put(`/notes/${note.note_id}`, {
         title: payload.title ?? note.title,
@@ -67,6 +71,7 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
         date: payload.date ?? note.date,
         location_id: payload.location_id !== undefined ? payload.location_id : note.location_id,
         created_at: payload.created_at,
+        area_ids: payload.area_ids,
       });
       onChanged();
     } catch {
@@ -104,6 +109,11 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
   async function onLocationPickExisting(locationId: string) {
     await patch({ location_id: locationId || null });
     toast.success("Konum güncellendi");
+  }
+
+  async function onAreasChange(ids: string[]) {
+    await patch({ area_ids: ids });
+    reloadAreas();
   }
 
   async function togglePin() {
@@ -219,6 +229,32 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
               >
                 <MapPin className="w-3 h-3 mr-1.5" strokeWidth={1.5} /> Yeni konum seç
               </Button>
+            </PopoverContent>
+          </Popover>
+
+          {/* Areas pill */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                className="note-meta-pill"
+                data-active={noteAreas.length > 0 ? "true" : "false"}
+                data-testid={`note-areas-pill-${note.note_id}`}
+              >
+                {noteAreas.length === 0 ? (
+                  <><Shapes className="w-3 h-3" strokeWidth={1.75} /> Alan ekle</>
+                ) : (
+                  noteAreas.map((a) => (
+                    <span key={a.area_id} className="inline-flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full" style={{ background: a.color }} />
+                      {a.name}
+                    </span>
+                  ))
+                )}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-72 p-3 bg-popover border-border space-y-2" data-testid="areas-popover">
+              <div className="text-[10px] tracking-[0.25em] uppercase text-muted-foreground">Kişisel alanlar</div>
+              <AreaPicker value={note.area_ids || []} onChange={onAreasChange} compact />
             </PopoverContent>
           </Popover>
         </div>

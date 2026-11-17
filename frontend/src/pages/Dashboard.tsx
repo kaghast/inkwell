@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import api from "@/lib/api";
+import { normalizeName } from "@/lib/names";
 import Sidebar from "@/components/Sidebar";
 import CalendarPanel from "@/components/CalendarPanel";
 import NoteCard from "@/components/NoteCard";
@@ -10,7 +11,9 @@ import SearchBar, { FilterChip } from "@/components/SearchBar";
 import PinnedNotesPanel from "@/components/PinnedNotesPanel";
 import GoogleCalendarPanel from "@/components/GoogleCalendarPanel";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { Hash, AtSign, MapPin, Search } from "lucide-react";
+import { Hash, AtSign, MapPin, Search, Shapes, Network } from "lucide-react";
+import { Link } from "react-router-dom";
+import { useAreas } from "@/contexts/AreasContext";
 import { FilterProvider, FilterType } from "@/contexts/FilterContext";
 import { toast } from "sonner";
 import type { Note, Tag, Person, LocationItem, CalendarCounts, DashboardMode } from "@/types";
@@ -36,6 +39,7 @@ export default function Dashboard({ mode = "day" }: Props) {
   const params = useParams<{ date?: string; name?: string; id?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { areaMap, reload: reloadAreas } = useAreas();
 
   // Result of the Google Calendar consent round-trip (?calendar=...).
   useEffect(() => {
@@ -116,6 +120,8 @@ export default function Dashboard({ mode = "day" }: Props) {
     if (mode === "location" && params.id) allLocs.unshift(params.id);
     if (allLocs.length > 0) queryParams.location_ids = allLocs;
 
+    if (mode === "area" && params.id) queryParams.area_id = params.id;
+
     if (extras.q.trim()) queryParams.q = extras.q.trim();
 
     const { data } = await api.get<Note[]>("/notes", { params: queryParams });
@@ -144,6 +150,7 @@ export default function Dashboard({ mode = "day" }: Props) {
 
   async function onDeleteNote(id: string) {
     await api.delete(`/notes/${id}`);
+    reloadAreas();
     fetchNotes();
     fetchCalendar(calMonth.year, calMonth.month);
     fetchAux();
@@ -151,6 +158,7 @@ export default function Dashboard({ mode = "day" }: Props) {
   }
 
   function onNoteCreated() {
+    reloadAreas();
     fetchNotes();
     fetchCalendar(calMonth.year, calMonth.month);
     fetchAux();
@@ -162,7 +170,7 @@ export default function Dashboard({ mode = "day" }: Props) {
     tryAddFilter: (type: FilterType, value: string, e: React.MouseEvent): boolean => {
       if (!(e.ctrlKey || e.metaKey)) return false;
       setExtras((prev) => {
-        const norm = value.toLowerCase();
+        const norm = normalizeName(value);
         if (type === "tag") {
           if (prev.tags.includes(norm)) return prev;
           toast.success(`+ #${norm}`);
@@ -239,6 +247,29 @@ export default function Dashboard({ mode = "day" }: Props) {
         </div>
       );
     }
+    if (mode === "area") {
+      const area = params.id ? areaMap[params.id] : null;
+      return (
+        <div className="mb-6">
+          <div className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground mb-2 flex items-center gap-1.5">
+            <Shapes className="w-3 h-3" strokeWidth={1.5} /> Kişisel alan
+          </div>
+          <h1 className="font-serif text-4xl sm:text-5xl tracking-tight flex items-center gap-3">
+            <span className="w-4 h-4 rounded-full shrink-0" style={{ background: area?.color || "hsl(var(--muted-foreground))" }} />
+            {area?.name || "Alan"}
+          </h1>
+          <div className="text-sm text-muted-foreground mt-1 flex items-center gap-3">
+            <span>{notes.length} not</span>
+            {params.id && (
+              <Link to={`/graph/area/${params.id}`} className="inline-flex items-center gap-1 hover:text-foreground" data-testid="area-graph-link">
+                <Network className="w-3.5 h-3.5" strokeWidth={1.5} /> Graph
+              </Link>
+            )}
+          </div>
+          {area?.description && <p className="text-sm text-muted-foreground mt-2 max-w-prose">{area.description}</p>}
+        </div>
+      );
+    }
     if (mode === "location") {
       const loc = params.id ? locationMap[params.id] : null;
       return (
@@ -297,10 +328,12 @@ export default function Dashboard({ mode = "day" }: Props) {
               onRemoveChip={onRemoveChip}
             />
 
-            {mode === "day" && extras.q.trim().length === 0 && extras.tags.length === 0 && extras.people.length === 0 && extras.locationIds.length === 0 && (
+            {(mode === "day" || mode === "area") && extras.q.trim().length === 0 && extras.tags.length === 0 && extras.people.length === 0 && extras.locationIds.length === 0 && (
               <div className="mb-6">
                 <NoteComposer
-                  defaultDate={selectedDate}
+                  key={mode === "area" ? `area-${params.id}` : "day"}
+                  defaultAreaIds={mode === "area" && params.id ? [params.id] : []}
+                  defaultDate={mode === "area" ? todayIso() : selectedDate}
                   locations={locations}
                   onCreated={onNoteCreated}
                   onLocationsChanged={fetchAux}

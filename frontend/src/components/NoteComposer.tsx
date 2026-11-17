@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { MapPin, Plus, X } from "lucide-react";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import LocationPicker from "@/components/LocationPicker";
+import AreaPicker from "@/components/AreaPicker";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import type { Note, LocationItem } from "@/types";
@@ -13,18 +14,21 @@ interface Props {
   locations: LocationItem[];
   onCreated: (n: Note) => void;
   onLocationsChanged?: () => void;
+  /** Areas pre-selected for new notes (e.g. when viewing an area). */
+  defaultAreaIds?: string[];
 }
 
-export default function NoteComposer({ defaultDate, locations, onCreated, onLocationsChanged }: Props) {
+export default function NoteComposer({ defaultDate, locations, onCreated, onLocationsChanged, defaultAreaIds }: Props) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [locationId, setLocationId] = useState<string | null>(null);
+  const [areaIds, setAreaIds] = useState<string[]>(defaultAreaIds || []);
   const [locationDialog, setLocationDialog] = useState(false);
   const [busy, setBusy] = useState(false);
 
   function reset() {
-    setTitle(""); setContent(""); setLocationId(null); setOpen(false);
+    setTitle(""); setContent(""); setLocationId(null); setAreaIds(defaultAreaIds || []); setOpen(false);
   }
 
   async function save() {
@@ -35,7 +39,7 @@ export default function NoteComposer({ defaultDate, locations, onCreated, onLoca
     setBusy(true);
     try {
       const { data } = await api.post<Note>("/notes", {
-        title, content, date: defaultDate, location_id: locationId,
+        title, content, date: defaultDate, location_id: locationId, area_ids: areaIds,
       });
       onCreated(data);
       reset();
@@ -87,6 +91,10 @@ export default function NoteComposer({ defaultDate, locations, onCreated, onLoca
         autoFocus
         onSubmit={save}
       />
+      <div className="flex items-start gap-2 pt-1" data-testid="composer-areas">
+        <span className="text-[10px] tracking-[0.25em] uppercase text-muted-foreground pt-1 shrink-0">Alan</span>
+        <AreaPicker value={areaIds} onChange={setAreaIds} />
+      </div>
       <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
         <div className="flex items-center gap-2">
           <Button

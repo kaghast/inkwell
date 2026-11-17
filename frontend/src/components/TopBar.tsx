@@ -1,6 +1,6 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Feather, Sun, Moon, LogOut, Menu, CalendarDays } from "lucide-react";
+import { Feather, Sun, Moon, LogOut, Menu, CalendarDays, Network, Settings2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,11 @@ export default function TopBar({ onLeftMenu, onRightMenu }: Props) {
         <Button size="icon" variant="ghost" className="lg:hidden h-8 w-8" onClick={onRightMenu} data-testid="topbar-right-menu-btn">
           <CalendarDays className="w-4 h-4" strokeWidth={1.25} />
         </Button>
+        <Button asChild size="icon" variant="ghost" className="h-8 w-8" title="Graph">
+          <Link to="/graph" data-testid="topbar-graph-btn" aria-label="Graph">
+            <Network className="w-4 h-4" strokeWidth={1.25} />
+          </Link>
+        </Button>
         <Button size="icon" variant="ghost" className="h-8 w-8" onClick={toggle} data-testid="theme-toggle-btn">
           {theme === "dark" ? <Sun className="w-4 h-4" strokeWidth={1.25} /> : <Moon className="w-4 h-4" strokeWidth={1.25} />}
         </Button>
@@ -62,6 +67,11 @@ export default function TopBar({ onLeftMenu, onRightMenu }: Props) {
                 <div className="text-muted-foreground truncate">{u.email}</div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem asChild className="cursor-pointer">
+                <Link to="/settings" data-testid="settings-link">
+                  <Settings2 className="w-3.5 h-3.5 mr-2" strokeWidth={1.25} /> Ayarlar
+                </Link>
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={logout} data-testid="logout-btn" className="cursor-pointer">
                 <LogOut className="w-3.5 h-3.5 mr-2" strokeWidth={1.25} /> Çıkış yap
               </DropdownMenuItem>

@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+import unicodedata
 import httpx
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
@@ -194,6 +195,7 @@ class NoteIn(BaseModel):
     content: str = ""
     date: Optional[str] = None  # ISO date YYYY-MM-DD
     location_id: Optional[str] = None
+    area_ids: Optional[List[str]] = None  # None on update → keep existing areas
     created_at: Optional[str] = None  # ISO datetime override
 
 
@@ -206,6 +208,7 @@ class NoteOut(BaseModel):
     date: str
     tags: List[str]
     people: List[str]
+    area_ids: List[str] = []
     location_id: Optional[str] = None
     pinned: bool = False
     created_at: datetime
@@ -474,50 +477,99 @@ async def calendar_disconnect(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Notes / Tags / People / Locations
 # ---------------------------------------------------------------------------
-TAG_RE = re.compile(r"(?<!\S)#([\w\-_ğüşıöçĞÜŞİÖÇ]+)", re.UNICODE)
-MENTION_RE = re.compile(r"(?<!\S)@([\w\-_ğüşıöçĞÜŞİÖÇ]+)", re.UNICODE)
+# ---- #tag / @person parsing (must match frontend/src/lib/names.ts)
+# A token starts after whitespace (or at line start) and runs over letters,
+# digits, "_" and "-". Code spans / fenced code blocks are never parsed or
+# rewritten, so `#include` in a code block is not a tag.
+TAG_RE = re.compile(r"(?<!\S)#([\w-]+)", re.UNICODE)
+MENTION_RE = re.compile(r"(?<!\S)@([\w-]+)", re.UNICODE)
+CODE_RE = re.compile(r"(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*`)")
+
+
+TURKISH_CHARS = set("çğışöüÇĞŞÖÜİı")
+
+
+def normalize_name(raw: str) -> str:
+    """Canonical tag/person name: NFC + lowercase. Words containing Turkish-only
+    letters use Turkish casing (I→ı, İ→i) so #ÇALIŞMA == #çalışma, while
+    plain-ASCII words keep the usual rule (#IBM → ibm)."""
+    s = unicodedata.normalize("NFC", raw or "").strip()
+    if any(ch in TURKISH_CHARS for ch in s):
+        s = s.replace("I", "ı")
+    return s.replace("İ", "i").lower().replace("i̇", "i")
+
+
+def _text_segments(content: str):
+    """Yield (is_code, segment) pieces of markdown content."""
+    pos = 0
+    for m in CODE_RE.finditer(content or ""):
+        if m.start() > pos:
+            yield False, content[pos:m.start()]
+        yield True, m.group(0)
+        pos = m.end()
+    if pos < len(content or ""):
+        yield False, content[pos:]
+
+
+def _extract(content: str, rx: re.Pattern) -> List[str]:
+    found: List[str] = []
+    for is_code, seg in _text_segments(content):
+        if not is_code:
+            found.extend(normalize_name(m.group(1)) for m in rx.finditer(seg))
+    return list(dict.fromkeys(n for n in found if n))
 
 
 def extract_tags(content: str) -> List[str]:
-    return list(dict.fromkeys([m.group(1).lower() for m in TAG_RE.finditer(content)]))
+    return _extract(content, TAG_RE)
 
 
 def extract_people(content: str) -> List[str]:
-    return list(dict.fromkeys([m.group(1).lower() for m in MENTION_RE.finditer(content)]))
+    return _extract(content, MENTION_RE)
 
 
-async def ensure_tags(user_id: str, tag_names: List[str]):
-    for raw in tag_names:
-        name = raw.strip().lower()
-        if not name:
-            continue
-        existing = await db.tags.find_one({"user_id": user_id, "name": name})
-        if not existing:
-            await db.tags.insert_one(
-                {
-                    "tag_id": f"tag_{uuid.uuid4().hex[:12]}",
-                    "user_id": user_id,
-                    "name": name,
-                    "created_at": datetime.now(timezone.utc),
-                }
-            )
+def _rewrite_tokens(content: str, rx: re.Pattern, sigil: str, old: str, new: Optional[str]) -> str:
+    """Rename (new=str) or remove (new=None) every `<sigil>old` token outside code."""
+    def fix_segment(seg: str) -> str:
+        out, pos = [], 0
+        for m in rx.finditer(seg):
+            if normalize_name(m.group(1)) != old:
+                continue
+            start, end = m.start(), m.end()
+            if new is not None:
+                out.append(seg[pos:start] + sigil + new)
+                pos = end
+                continue
+            # Removal: also drop one adjacent space so no double spaces remain.
+            if end < len(seg) and seg[end] in " \t":
+                end += 1
+            elif start > 0 and seg[start - 1] in " \t":
+                start -= 1
+            out.append(seg[pos:start])
+            pos = end
+        out.append(seg[pos:])
+        return "".join(out)
+
+    return "".join(seg if is_code else fix_segment(seg) for is_code, seg in _text_segments(content))
 
 
-async def ensure_people(user_id: str, names: List[str]):
-    for raw in names:
-        name = raw.strip().lower()
-        if not name:
-            continue
-        existing = await db.people.find_one({"user_id": user_id, "name": name})
-        if not existing:
-            await db.people.insert_one(
-                {
-                    "person_id": f"person_{uuid.uuid4().hex[:12]}",
-                    "user_id": user_id,
-                    "name": name,
-                    "created_at": datetime.now(timezone.utc),
-                }
-            )
+async def sync_entities(user_id: str) -> None:
+    """Make the tags/people collections mirror exactly what notes reference."""
+    now = datetime.now(timezone.utc)
+    for coll, field, id_key, prefix in (
+        (db.tags, "tags", "tag_id", "tag"),
+        (db.people, "people", "person_id", "person"),
+    ):
+        used = {n for n in await db.notes.distinct(field, {"user_id": user_id}) if n}
+        existing = {d["name"] for d in await coll.find({"user_id": user_id}, {"name": 1}).to_list(None)}
+        missing = used - existing
+        if missing:
+            await coll.insert_many([
+                {id_key: f"{prefix}_{uuid.uuid4().hex[:12]}", "user_id": user_id, "name": n, "created_at": now}
+                for n in sorted(missing)
+            ])
+        orphans = existing - used
+        if orphans:
+            await coll.delete_many({"user_id": user_id, "name": {"$in": list(orphans)}})
 
 
 def today_iso() -> str:
@@ -568,16 +620,23 @@ async def sync_reminders(user_id: str, note_id: str, content: str):
         await db.reminders.insert_many(docs)
 
 
+async def _valid_area_ids(user_id: str, area_ids: Optional[List[str]]) -> List[str]:
+    if not area_ids:
+        return []
+    wanted = list(dict.fromkeys(a for a in area_ids if a))
+    found = await db.areas.distinct("area_id", {"user_id": user_id, "area_id": {"$in": wanted}})
+    return [a for a in wanted if a in set(found)]
+
+
+def _in_or_all(values: List[str], op: str = "$all"):
+    return values[0] if len(values) == 1 else {op: values}
+
+
 # ---- Notes
 @api_router.post("/notes", response_model=NoteOut)
 async def create_note(payload: NoteIn, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
     content = payload.content or ""
-    tags = extract_tags(content)
-    people = extract_people(content)
-    await ensure_tags(user_id, tags)
-    await ensure_people(user_id, people)
-
     note_id = f"note_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc)
     doc = {
@@ -586,14 +645,16 @@ async def create_note(payload: NoteIn, user: dict = Depends(get_current_user)):
         "title": (payload.title or "").strip(),
         "content": content,
         "date": payload.date or today_iso(),
-        "tags": tags,
-        "people": people,
+        "tags": extract_tags(content),
+        "people": extract_people(content),
+        "area_ids": await _valid_area_ids(user_id, payload.area_ids),
         "location_id": payload.location_id,
         "pinned": False,
         "created_at": now,
         "updated_at": now,
     }
     await db.notes.insert_one(doc)
+    await sync_entities(user_id)
     await sync_reminders(user_id, note_id, content)
     doc.pop("_id", None)
     return doc
@@ -605,9 +666,11 @@ async def list_notes(
     tag: Optional[str] = None,
     person: Optional[str] = None,
     location_id: Optional[str] = None,
+    area_id: Optional[str] = None,
     tags: List[str] = Query(default_factory=list),
     people: List[str] = Query(default_factory=list),
     location_ids: List[str] = Query(default_factory=list),
+    area_ids: List[str] = Query(default_factory=list),
     q: Optional[str] = None,
     pinned: Optional[bool] = None,
     user: dict = Depends(get_current_user),
@@ -620,23 +683,18 @@ async def list_notes(
     elif pinned is False:
         qf["pinned"] = {"$ne": True}
 
-    all_tags = list({t.lower() for t in tags} | ({tag.lower()} if tag else set()))
-    if len(all_tags) == 1:
-        qf["tags"] = all_tags[0]
-    elif len(all_tags) > 1:
-        qf["tags"] = {"$all": all_tags}
-
-    all_people = list({p.lower() for p in people} | ({person.lower()} if person else set()))
-    if len(all_people) == 1:
-        qf["people"] = all_people[0]
-    elif len(all_people) > 1:
-        qf["people"] = {"$all": all_people}
-
-    all_locs = list({l for l in location_ids} | ({location_id} if location_id else set()))
-    if len(all_locs) == 1:
-        qf["location_id"] = all_locs[0]
-    elif len(all_locs) > 1:
-        qf["location_id"] = {"$in": all_locs}
+    all_tags = sorted({normalize_name(t) for t in tags + ([tag] if tag else [])} - {""})
+    if all_tags:
+        qf["tags"] = _in_or_all(all_tags)
+    all_people = sorted({normalize_name(p) for p in people + ([person] if person else [])} - {""})
+    if all_people:
+        qf["people"] = _in_or_all(all_people)
+    all_locs = sorted(set(location_ids) | ({location_id} if location_id else set()))
+    if all_locs:
+        qf["location_id"] = _in_or_all(all_locs, "$in")
+    all_areas = sorted(set(area_ids) | ({area_id} if area_id else set()))
+    if all_areas:
+        qf["area_ids"] = _in_or_all(all_areas)
 
     if q:
         rx = {"$regex": re.escape(q), "$options": "i"}
@@ -676,19 +734,17 @@ async def update_note(note_id: str, payload: NoteIn, user: dict = Depends(get_cu
     if not existing:
         raise HTTPException(404, "Not found")
     content = payload.content or ""
-    tags = extract_tags(content)
-    people = extract_people(content)
-    await ensure_tags(user_id, tags)
-    await ensure_people(user_id, people)
     update = {
         "title": (payload.title or "").strip(),
         "content": content,
         "date": payload.date or existing["date"],
-        "tags": tags,
-        "people": people,
+        "tags": extract_tags(content),
+        "people": extract_people(content),
         "location_id": payload.location_id,
         "updated_at": datetime.now(timezone.utc),
     }
+    if payload.area_ids is not None:  # omitted → keep current areas
+        update["area_ids"] = await _valid_area_ids(user_id, payload.area_ids)
     if payload.created_at:
         try:
             iso = payload.created_at.replace("Z", "+00:00")
@@ -696,6 +752,7 @@ async def update_note(note_id: str, payload: NoteIn, user: dict = Depends(get_cu
         except ValueError:
             pass
     await db.notes.update_one({"note_id": note_id, "user_id": user_id}, {"$set": update})
+    await sync_entities(user_id)
     await sync_reminders(user_id, note_id, content)
     note = await db.notes.find_one({"note_id": note_id}, {"_id": 0})
     return note
@@ -718,103 +775,255 @@ async def delete_note(note_id: str, user: dict = Depends(get_current_user)):
     if res.deleted_count == 0:
         raise HTTPException(404, "Not found")
     await db.reminders.delete_many({"note_id": note_id, "user_id": user["user_id"]})
+    await sync_entities(user["user_id"])
     return {"ok": True}
 
 
-# ---- Tags
+# ---- Tags & People share the same rename/delete logic
+ENTITY_KINDS = {
+    "tag": {"coll": "tags", "id": "tag_id", "field": "tags", "rx": TAG_RE, "sigil": "#", "label": "Tag"},
+    "person": {"coll": "people", "id": "person_id", "field": "people", "rx": MENTION_RE, "sigil": "@", "label": "Person"},
+}
+
+
+async def _list_entities(kind: str, user_id: str, q: Optional[str]):
+    k = ENTITY_KINDS[kind]
+    query: dict = {"user_id": user_id}
+    if q:
+        query["name"] = {"$regex": f"^{re.escape(normalize_name(q))}"}
+    return await db[k["coll"]].find(query, {"_id": 0}).sort("name", 1).to_list(500)
+
+
+async def _rename_entity(kind: str, entity_id: str, raw_name: str, user_id: str):
+    k = ENTITY_KINDS[kind]
+    coll = db[k["coll"]]
+    new_name = normalize_name(raw_name.lstrip(k["sigil"]))
+    if not new_name or not re.fullmatch(r"[\w-]+", new_name):
+        raise HTTPException(400, "Name may only contain letters, digits, '_' and '-'")
+    doc = await coll.find_one({k["id"]: entity_id, "user_id": user_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    old_name = doc["name"]
+    if old_name == new_name:
+        return doc
+    if await coll.find_one({"user_id": user_id, "name": new_name}):
+        raise HTTPException(400, f"{k['label']} name already exists")
+    await coll.update_one({k["id"]: entity_id}, {"$set": {"name": new_name}})
+    now = datetime.now(timezone.utc)
+    async for n in db.notes.find({"user_id": user_id, k["field"]: old_name}):
+        content = _rewrite_tokens(n["content"], k["rx"], k["sigil"], old_name, new_name)
+        await db.notes.update_one(
+            {"note_id": n["note_id"]},
+            {"$set": {"content": content, k["field"]: _extract(content, k["rx"]), "updated_at": now}},
+        )
+    await sync_entities(user_id)
+    doc["name"] = new_name
+    return doc
+
+
+async def _delete_entity(kind: str, entity_id: str, user_id: str):
+    """Delete the tag/person AND strip its #token / @token from every note."""
+    k = ENTITY_KINDS[kind]
+    doc = await db[k["coll"]].find_one({k["id"]: entity_id, "user_id": user_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    name = doc["name"]
+    now = datetime.now(timezone.utc)
+    updated = 0
+    async for n in db.notes.find({"user_id": user_id, k["field"]: name}):
+        content = _rewrite_tokens(n["content"], k["rx"], k["sigil"], name, None)
+        await db.notes.update_one(
+            {"note_id": n["note_id"]},
+            {"$set": {"content": content, k["field"]: _extract(content, k["rx"]), "updated_at": now}},
+        )
+        updated += 1
+    await db[k["coll"]].delete_one({k["id"]: entity_id})
+    await sync_entities(user_id)
+    return {"ok": True, "notes_updated": updated}
+
+
 @api_router.get("/tags")
 async def list_tags(q: Optional[str] = None, user: dict = Depends(get_current_user)):
-    query: dict = {"user_id": user["user_id"]}
-    if q:
-        query["name"] = {"$regex": f"^{re.escape(q.lower())}"}
-    tags = await db.tags.find(query, {"_id": 0}).sort("name", 1).to_list(500)
-    return tags
+    return await _list_entities("tag", user["user_id"], q)
 
 
 @api_router.put("/tags/{tag_id}")
 async def rename_tag(tag_id: str, payload: RenameIn, user: dict = Depends(get_current_user)):
-    new_name = payload.name.strip().lower()
-    if not new_name:
-        raise HTTPException(400, "Name required")
-    tag = await db.tags.find_one({"tag_id": tag_id, "user_id": user["user_id"]}, {"_id": 0})
-    if not tag:
-        raise HTTPException(404, "Not found")
-    old_name = tag["name"]
-    if old_name == new_name:
-        return tag
-    # check conflict
-    conflict = await db.tags.find_one({"user_id": user["user_id"], "name": new_name})
-    if conflict:
-        raise HTTPException(400, "Tag name already exists")
-    await db.tags.update_one({"tag_id": tag_id}, {"$set": {"name": new_name}})
-    # Update notes: tags array + content #old -> #new
-    pattern = re.compile(r"(?<!\S)#" + re.escape(old_name) + r"(?!\w)", re.UNICODE | re.IGNORECASE)
-    cursor = db.notes.find({"user_id": user["user_id"], "tags": old_name})
-    async for n in cursor:
-        new_content = pattern.sub(f"#{new_name}", n["content"])
-        new_tags = [new_name if t == old_name else t for t in n.get("tags", [])]
-        await db.notes.update_one(
-            {"note_id": n["note_id"]},
-            {"$set": {"content": new_content, "tags": new_tags, "updated_at": datetime.now(timezone.utc)}},
-        )
-    tag["name"] = new_name
-    return tag
+    return await _rename_entity("tag", tag_id, payload.name, user["user_id"])
 
 
 @api_router.delete("/tags/{tag_id}")
 async def delete_tag(tag_id: str, user: dict = Depends(get_current_user)):
-    tag = await db.tags.find_one({"tag_id": tag_id, "user_id": user["user_id"]}, {"_id": 0})
-    if not tag:
-        raise HTTPException(404, "Not found")
-    await db.tags.delete_one({"tag_id": tag_id})
-    return {"ok": True}
+    return await _delete_entity("tag", tag_id, user["user_id"])
 
 
-# ---- People
 @api_router.get("/people")
 async def list_people(q: Optional[str] = None, user: dict = Depends(get_current_user)):
-    query: dict = {"user_id": user["user_id"]}
-    if q:
-        query["name"] = {"$regex": f"^{re.escape(q.lower())}"}
-    people = await db.people.find(query, {"_id": 0}).sort("name", 1).to_list(500)
-    return people
+    return await _list_entities("person", user["user_id"], q)
 
 
 @api_router.put("/people/{person_id}")
 async def rename_person(person_id: str, payload: RenameIn, user: dict = Depends(get_current_user)):
-    new_name = payload.name.strip().lower()
-    if not new_name:
-        raise HTTPException(400, "Name required")
-    person = await db.people.find_one({"person_id": person_id, "user_id": user["user_id"]}, {"_id": 0})
-    if not person:
-        raise HTTPException(404, "Not found")
-    old_name = person["name"]
-    if old_name == new_name:
-        return person
-    conflict = await db.people.find_one({"user_id": user["user_id"], "name": new_name})
-    if conflict:
-        raise HTTPException(400, "Person name already exists")
-    await db.people.update_one({"person_id": person_id}, {"$set": {"name": new_name}})
-    pattern = re.compile(r"(?<!\S)@" + re.escape(old_name) + r"(?!\w)", re.UNICODE | re.IGNORECASE)
-    cursor = db.notes.find({"user_id": user["user_id"], "people": old_name})
-    async for n in cursor:
-        new_content = pattern.sub(f"@{new_name}", n["content"])
-        new_people = [new_name if p == old_name else p for p in n.get("people", [])]
-        await db.notes.update_one(
-            {"note_id": n["note_id"]},
-            {"$set": {"content": new_content, "people": new_people, "updated_at": datetime.now(timezone.utc)}},
-        )
-    person["name"] = new_name
-    return person
+    return await _rename_entity("person", person_id, payload.name, user["user_id"])
 
 
 @api_router.delete("/people/{person_id}")
 async def delete_person(person_id: str, user: dict = Depends(get_current_user)):
-    person = await db.people.find_one({"person_id": person_id, "user_id": user["user_id"]}, {"_id": 0})
-    if not person:
+    return await _delete_entity("person", person_id, user["user_id"])
+
+
+# ---- Personal areas (Ayarlar → Kişisel alanlar)
+AREA_COLORS = ["#c2410c", "#0f766e", "#7c3aed", "#b91c1c", "#1d4ed8", "#a16207", "#be185d", "#15803d"]
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+class AreaIn(BaseModel):
+    name: str
+    color: Optional[str] = None
+    description: Optional[str] = None
+
+
+class AreaPatch(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    description: Optional[str] = None
+    position: Optional[int] = None
+
+
+async def _area_counts(user_id: str) -> dict:
+    res = await db.notes.aggregate([
+        {"$match": {"user_id": user_id, "area_ids.0": {"$exists": True}}},
+        {"$unwind": "$area_ids"},
+        {"$group": {"_id": "$area_ids", "count": {"$sum": 1}}},
+    ]).to_list(None)
+    return {r["_id"]: r["count"] for r in res}
+
+
+async def _list_areas(user_id: str) -> List[dict]:
+    areas = await db.areas.find({"user_id": user_id}, {"_id": 0}).sort([("position", 1), ("created_at", 1)]).to_list(200)
+    counts = await _area_counts(user_id)
+    for a in areas:
+        a["note_count"] = counts.get(a["area_id"], 0)
+    return areas
+
+
+def _clean_area_name(name: Optional[str]) -> str:
+    n = unicodedata.normalize("NFC", (name or "").strip())
+    if not n or len(n) > 60:
+        raise HTTPException(400, "Area name must be 1-60 characters")
+    return n
+
+
+async def _ensure_unique_area(user_id: str, name: str, exclude: Optional[str] = None):
+    key = normalize_name(name)
+    query: dict = {"user_id": user_id, "name_key": key}
+    if exclude:
+        query["area_id"] = {"$ne": exclude}
+    if await db.areas.find_one(query):
+        raise HTTPException(400, "Area name already exists")
+
+
+@api_router.get("/areas")
+async def list_areas(user: dict = Depends(get_current_user)):
+    return await _list_areas(user["user_id"])
+
+
+@api_router.post("/areas")
+async def create_area(payload: AreaIn, user: dict = Depends(get_current_user)):
+    user_id = user["user_id"]
+    name = _clean_area_name(payload.name)
+    await _ensure_unique_area(user_id, name)
+    count = await db.areas.count_documents({"user_id": user_id})
+    if count >= 50:
+        raise HTTPException(400, "Too many areas (max 50)")
+    color = payload.color if payload.color and HEX_COLOR_RE.match(payload.color) else AREA_COLORS[count % len(AREA_COLORS)]
+    doc = {
+        "area_id": f"area_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "name": name,
+        "name_key": normalize_name(name),
+        "color": color,
+        "description": (payload.description or "").strip()[:280] or None,
+        "position": count,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.areas.insert_one(doc)
+    doc.pop("_id", None)
+    doc["note_count"] = 0
+    return doc
+
+
+@api_router.put("/areas/{area_id}")
+async def update_area(area_id: str, payload: AreaPatch, user: dict = Depends(get_current_user)):
+    user_id = user["user_id"]
+    area = await db.areas.find_one({"area_id": area_id, "user_id": user_id})
+    if not area:
         raise HTTPException(404, "Not found")
-    await db.people.delete_one({"person_id": person_id})
+    upd: dict = {}
+    if payload.name is not None:
+        name = _clean_area_name(payload.name)
+        await _ensure_unique_area(user_id, name, exclude=area_id)
+        upd.update(name=name, name_key=normalize_name(name))
+    if payload.color is not None:
+        if not HEX_COLOR_RE.match(payload.color):
+            raise HTTPException(400, "Color must be #rrggbb")
+        upd["color"] = payload.color
+    if payload.description is not None:
+        upd["description"] = payload.description.strip()[:280] or None
+    if payload.position is not None:
+        upd["position"] = payload.position
+    if upd:
+        await db.areas.update_one({"area_id": area_id}, {"$set": upd})
+    return next(a for a in await _list_areas(user_id) if a["area_id"] == area_id)
+
+
+@api_router.delete("/areas/{area_id}")
+async def delete_area(area_id: str, user: dict = Depends(get_current_user)):
+    user_id = user["user_id"]
+    res = await db.areas.delete_one({"area_id": area_id, "user_id": user_id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Not found")
+    await db.notes.update_many({"user_id": user_id, "area_ids": area_id}, {"$pull": {"area_ids": area_id}})
     return {"ok": True}
+
+
+# ---- Graph data
+def _snippet(content: str, limit: int = 90) -> str:
+    text = "".join(seg for is_code, seg in _text_segments(content) if not is_code)
+    text = re.sub(r"[#>*_`\[\]()!-]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+@api_router.get("/graph")
+async def graph(area_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Areas (with note counts) + lightweight note nodes. With `area_id`, only the
+    notes directly linked to that area (its first-degree neighbourhood)."""
+    user_id = user["user_id"]
+    areas = await _list_areas(user_id)
+    qf: dict = {"user_id": user_id}
+    if area_id:
+        if not any(a["area_id"] == area_id for a in areas):
+            raise HTTPException(404, "Area not found")
+        qf["area_ids"] = area_id
+    notes = await db.notes.find(
+        qf, {"_id": 0, "note_id": 1, "title": 1, "content": 1, "date": 1, "area_ids": 1, "tags": 1, "people": 1},
+    ).sort("created_at", -1).to_list(2000)
+    return {
+        "areas": areas,
+        "notes": [
+            {
+                "note_id": n["note_id"],
+                "title": n.get("title") or "",
+                "snippet": _snippet(n.get("content") or ""),
+                "date": n.get("date"),
+                "area_ids": n.get("area_ids") or [],
+                "tags": n.get("tags") or [],
+                "people": n.get("people") or [],
+            }
+            for n in notes
+        ],
+    }
 
 
 # ---- Locations
@@ -1102,6 +1311,36 @@ async def mark_reminder_fired(reminder_id: str, user: dict = Depends(get_current
 
 
 # ---------------------------------------------------------------------------
+# Data migrations (idempotent, versioned)
+# ---------------------------------------------------------------------------
+SCHEMA_VERSION = 2
+
+
+async def migrate() -> None:
+    meta = await db.meta.find_one({"_id": "schema"}) or {}
+    if meta.get("version", 0) >= SCHEMA_VERSION:
+        return
+    # v2: re-derive tags/people with the unified parser (code blocks ignored,
+    # Turkish-safe lowercase) and rebuild the tags/people collections.
+    user_ids = set()
+    async for n in db.notes.find({}, {"note_id": 1, "user_id": 1, "content": 1, "area_ids": 1}):
+        content = n.get("content") or ""
+        upd = {"tags": extract_tags(content), "people": extract_people(content)}
+        if "area_ids" not in n:
+            upd["area_ids"] = []
+        await db.notes.update_one({"_id": n["_id"]}, {"$set": upd})
+        user_ids.add(n["user_id"])
+    user_ids |= set(await db.tags.distinct("user_id")) | set(await db.people.distinct("user_id"))
+    for uid in user_ids:
+        # Old docs may hold non-normalized names; rebuild from notes.
+        await db.tags.delete_many({"user_id": uid})
+        await db.people.delete_many({"user_id": uid})
+        await sync_entities(uid)
+    await db.meta.update_one({"_id": "schema"}, {"$set": {"version": SCHEMA_VERSION}}, upsert=True)
+    logging.info("Migrated data to schema v%s (%d users)", SCHEMA_VERSION, len(user_ids))
+
+
+# ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
@@ -1122,6 +1361,10 @@ async def startup():
     await db.reminders.create_index([("user_id", 1), ("at", 1)])
     await db.reminders.create_index("reminder_id", unique=True)
     await db.files.create_index("file_id", unique=True)
+    await db.areas.create_index("area_id", unique=True)
+    await db.areas.create_index([("user_id", 1), ("name_key", 1)], unique=True)
+    await db.notes.create_index([("user_id", 1), ("area_ids", 1)])
+    await migrate()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     if not GOOGLE.configured:
         logging.warning("GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / APP_URL not set — sign-in will not work")

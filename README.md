@@ -12,11 +12,20 @@ kullanıcı SaaS mimarisi ile.
   kalıcıdır (kullanıcı kaldırana ya da Google hesabından iptal edene kadar).
   Seçili günün etkinlikleri sağ panelde listelenir.
 - **Markdown** destekli zengin notlar (`react-markdown` + GFM)
+- **Kişisel alanlar**: Ayarlar'dan hayat alanlarınızı (İş, Aile, Sağlık…) renk ve
+  açıklamayla tanımlayın; not yazarken notu bir veya birden fazla alanla ilişkilendirin.
+- **Graph**: alanlar merkezde, yarıçapları içerdikleri not sayısına göre (alanı not
+  sayısıyla orantılı). Bir alana tıklayınca ona bağlı birinci derece notların graph'ı
+  açılır; ortak #etiket / @kişi paylaşan notlar kesikli çizgiyle bağlanır.
 - `#etiket` ve `@kişi` ile **autocomplete dropdown**; her etiket/kişi kendi URL'ine sahip.
+  Etiket listesi her zaman notlarla senkron: hiçbir notta geçmeyen etiket listeden düşer.
+  Kod blokları içindeki `#include` gibi ifadeler etiket sayılmaz. Türkçe harfler için
+  tutarlı küçük harf (`#ÇALIŞMA` = `#çalışma`, `#İzmir` = `#izmir`).
 - **Konum**: Tarayıcının `geolocation` API'si; Leaflet/OpenStreetMap mini harita.
 - **3 sütunlu** masaüstü layout; mobilde sol/sağ paneller drawer/sheet'e dönüşür.
 - **Aylık takvim** günde kaç not olduğunu badge ile gösterir.
 - Etiket/kişi/konum **yeniden adlandırma → tüm notlarda otomatik güncellenir**.
+- Etiket/kişi **silme → `#etiket` / `@kişi` ifadeleri tüm notların içeriğinden de kaldırılır**.
 - Görsel yükleme (yerel disk / Docker volume), hatırlatıcılar, link önizleme.
 - **Light / Dark** tema.
 
@@ -68,11 +77,16 @@ docker compose up -d --build
 ## Geliştirme (yerel)
 ```bash
 # backend/.env : MONGO_URL, DB_NAME, SECRET_KEY, GOOGLE_*, APP_URL=http://localhost:3000, COOKIE_SECURE=false
-cd backend && pip install -r requirements.txt && uvicorn server:app --port 8001 --reload
-cd frontend && yarn install && yarn start   # /api → localhost:8001 (src/setupProxy.js)
+cd backend && pip install -r requirements-dev.txt && uvicorn server:app --port 8001 --reload
+cd frontend && yarn install --frozen-lockfile && yarn start   # /api → localhost:8001 (src/setupProxy.js)
 ```
 
-Testler çalışan bir API ve MongoDB'ye karşı koşar (oturumlar doğrudan DB'ye yazılır):
+Çevrimdışı testler (sunucu/MongoDB gerekmez, mongomock kullanır):
+```bash
+pytest backend/tests/test_offline_entities.py
+```
+
+Entegrasyon testleri çalışan bir API ve MongoDB'ye karşı koşar (oturumlar doğrudan DB'ye yazılır):
 ```bash
 INKWELL_API_URL=http://localhost:8001 MONGO_URL=mongodb://localhost:27017 pytest backend/tests
 ```
@@ -88,10 +102,12 @@ Tüm endpointler `/api` altındadır.
 | GET | `/api/google/calendar/status` | Takvim bağlı mı |
 | GET | `/api/google/calendar/events?time_min=&time_max=` | Birincil takvimdeki etkinlikler |
 | DELETE | `/api/google/calendar` | Takvim bağlantısını kaldır (token Google'da da iptal edilir) |
-| GET/POST/PUT/DELETE | `/api/notes` | Notlar CRUD + filtreler |
+| GET/POST/PUT/DELETE | `/api/notes` | Notlar CRUD + filtreler (`area_id`, `tags`, `people`, `q`…) |
 | GET | `/api/notes/calendar?year=&month=` | Aylık gün başına not sayısı |
-| GET/PUT/DELETE | `/api/tags/:tag_id` | Etiket yönetimi |
-| GET/PUT/DELETE | `/api/people/:person_id` | Kişi yönetimi |
+| GET/PUT/DELETE | `/api/tags/:tag_id` | Etiket yönetimi (silme notlardan da çıkarır) |
+| GET/PUT/DELETE | `/api/people/:person_id` | Kişi yönetimi (silme notlardan da çıkarır) |
+| GET/POST/PUT/DELETE | `/api/areas` | Kişisel alanlar (not sayılarıyla) |
+| GET | `/api/graph?area_id=` | Graph verisi: alanlar + not düğümleri (opsiyonel: bir alanın birinci derece notları) |
 | GET/POST/PUT/DELETE | `/api/locations` | Konum yönetimi |
 | POST | `/api/uploads/image` · GET `/api/files/:id` | Görsel yükleme / indirme |
 

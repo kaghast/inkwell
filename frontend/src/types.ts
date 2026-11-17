@@ -42,6 +42,7 @@ export interface Note {
   date: string; // YYYY-MM-DD
   tags: string[];
   people: string[];
+  area_ids?: string[];
   location_id?: string | null;
   pinned?: boolean;
   created_at: string;
@@ -53,6 +54,33 @@ export interface NoteInput {
   content: string;
   date?: string;
   location_id?: string | null;
+  area_ids?: string[];
+}
+
+/** A user-defined personal area (Ayarlar → Kişisel alanlar). */
+export interface Area {
+  area_id: string;
+  name: string;
+  color: string; // #rrggbb
+  description?: string | null;
+  position: number;
+  note_count: number;
+  created_at: string;
+}
+
+export interface GraphNote {
+  note_id: string;
+  title: string;
+  snippet: string;
+  date: string;
+  area_ids: string[];
+  tags: string[];
+  people: string[];
+}
+
+export interface GraphData {
+  areas: Area[];
+  notes: GraphNote[];
 }
 
 export type CalendarCounts = Record<string, number>;
@@ -69,4 +97,4 @@ export interface GoogleEvent {
 
 export type Theme = "light" | "dark";
 
-export type DashboardMode = "day" | "tag" | "person" | "location";
+export type DashboardMode = "day" | "tag" | "person" | "location" | "area";

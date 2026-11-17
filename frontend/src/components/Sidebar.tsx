@@ -1,6 +1,7 @@
 import React, { useState, ComponentType, MouseEvent as ReactMouseEvent } from "react";
-import { useNavigate } from "react-router-dom";
-import { Hash, AtSign, MapPin, Pencil, Trash2, X, Check } from "lucide-react";
+import { useNavigate, Link, NavLink } from "react-router-dom";
+import { Hash, AtSign, MapPin, Pencil, Trash2, X, Check, Network, Settings2 } from "lucide-react";
+import { useAreas } from "@/contexts/AreasContext";
 import api from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -26,9 +27,10 @@ interface EditableRowProps {
   onDelete: () => Promise<void>;
   accentClass: string;
   testid: string;
+  deleteHint?: string;
 }
 
-function EditableRow({ icon: Icon, label, to, filterType, filterValue, onRename, onDelete, accentClass, testid }: EditableRowProps) {
+function EditableRow({ icon: Icon, label, to, filterType, filterValue, onRename, onDelete, accentClass, testid, deleteHint }: EditableRowProps) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(label);
   const nav = useNavigate();
@@ -91,7 +93,7 @@ function EditableRow({ icon: Icon, label, to, filterType, filterValue, onRename,
           <AlertDialogContent className="bg-card border-border rounded-md">
             <AlertDialogHeader>
               <AlertDialogTitle className="font-serif">Silinsin mi?</AlertDialogTitle>
-              <AlertDialogDescription>&quot;{label}&quot; silinecek. Bu eylem geri alınamaz.</AlertDialogDescription>
+              <AlertDialogDescription>&quot;{label}&quot; silinecek.{deleteHint ? ` ${deleteHint}` : ""} Bu eylem geri alınamaz.</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>İptal</AlertDialogCancel>
@@ -111,9 +113,53 @@ interface SidebarProps {
   onChange: () => void;
 }
 
+function AreasSection() {
+  const { areas } = useAreas();
+  return (
+    <section className="mb-6" data-testid="sidebar-areas">
+      <div className="flex items-center justify-between px-2 mb-2">
+        <span className="text-[10px] tracking-[0.3em] uppercase text-muted-foreground">Kişisel alanlar</span>
+        <div className="flex items-center gap-1">
+          <Link to="/graph" title="Graph" className="p-1 text-muted-foreground hover:text-foreground" data-testid="sidebar-graph-link">
+            <Network className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </Link>
+          <Link to="/settings" title="Alanları düzenle" className="p-1 text-muted-foreground hover:text-foreground" data-testid="sidebar-settings-link">
+            <Settings2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </Link>
+        </div>
+      </div>
+      {areas.length === 0 ? (
+        <Link to="/settings" className="block px-2 py-1 text-xs text-muted-foreground hover:text-foreground">
+          + Ayarlar'dan alan tanımlayın
+        </Link>
+      ) : (
+        <div className="space-y-0.5">
+          {areas.map((a) => (
+            <NavLink
+              key={a.area_id}
+              to={`/area/${a.area_id}`}
+              className={({ isActive }) =>
+                `flex items-center justify-between px-2 py-1 rounded-md text-sm transition-colors ${isActive ? "bg-accent" : "hover:bg-accent/50"}`
+              }
+              data-testid={`sidebar-area-${a.area_id}`}
+            >
+              <span className="flex items-center gap-2 truncate">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: a.color }} />
+                <span className="truncate">{a.name}</span>
+              </span>
+              <span className="font-mono text-[11px] text-muted-foreground">{a.note_count}</span>
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function Sidebar({ tags, people, locations, onChange }: SidebarProps) {
   return (
     <aside className="h-full overflow-y-auto p-5" data-testid="sidebar">
+      <AreasSection />
       <Tabs defaultValue="tags" className="w-full">
         <TabsList className="grid grid-cols-3 mb-5 bg-secondary rounded-lg w-full" data-testid="sidebar-tabs">
           <TabsTrigger value="tags" data-testid="sidebar-tab-tags" className="text-xs tracking-wide rounded-md">
@@ -140,8 +186,9 @@ export default function Sidebar({ tags, people, locations, onChange }: SidebarPr
                 filterType="tag"
                 filterValue={t.name}
                 onRename={async (n) => { await api.put(`/tags/${t.tag_id}`, { name: n }); onChange(); }}
-                onDelete={async () => { await api.delete(`/tags/${t.tag_id}`); toast.success("Etiket silindi"); onChange(); }}
+                onDelete={async () => { const { data } = await api.delete(`/tags/${t.tag_id}`); toast.success(`Etiket silindi · ${data?.notes_updated ?? 0} nottan çıkarıldı`); onChange(); }}
                 testid={`tag-${t.name}`}
+                deleteHint={`Tüm notlardaki #${t.name} ifadeleri de kaldırılacak.`}
               />
             ))}
           </div>
@@ -160,8 +207,9 @@ export default function Sidebar({ tags, people, locations, onChange }: SidebarPr
                 filterType="person"
                 filterValue={p.name}
                 onRename={async (n) => { await api.put(`/people/${p.person_id}`, { name: n }); onChange(); }}
-                onDelete={async () => { await api.delete(`/people/${p.person_id}`); toast.success("Kişi silindi"); onChange(); }}
+                onDelete={async () => { const { data } = await api.delete(`/people/${p.person_id}`); toast.success(`Kişi silindi · ${data?.notes_updated ?? 0} nottan çıkarıldı`); onChange(); }}
                 testid={`person-${p.name}`}
+                deleteHint={`Tüm notlardaki @${p.name} ifadeleri de kaldırılacak.`}
               />
             ))}
           </div>

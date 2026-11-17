@@ -7,10 +7,9 @@ import api from "@/lib/api";
 import { BellRing, MapPin, Youtube, Check, Loader2 } from "lucide-react";
 import { isGmap, isYoutube, extractYoutubeId } from "@/lib/blocks";
 import { highlightText } from "@/lib/highlight";
+import { TAG_RE, MEN_RE, normalizeName } from "@/lib/names";
 import { toast } from "sonner";
 
-const TAG_RE = /(^|\s)#([\w\-_ğüşıöçĞÜŞİÖÇ]+)/gu;
-const MEN_RE = /(^|\s)@([\w\-_ğüşıöçĞÜŞİÖÇ]+)/gu;
 
 function TagLink({ name }: { name: string }) {
   const { tryAddFilter } = useFilter();
@@ -55,7 +54,7 @@ function transformChildren(children: ReactNode, highlight?: string): ReactNode[]
       let m: RegExpExecArray | null;
       while ((m = re.exec(p)) !== null) {
         if (m.index + m[1].length > last) parts.push(p.slice(last, m.index + m[1].length));
-        const tagName = m[2].toLowerCase();
+        const tagName = normalizeName(m[2]);
         parts.push(<TagLink key={`t-${idx}-${i}-${m.index}`} name={tagName} />);
         last = m.index + m[1].length + 1 + m[2].length;
       }
@@ -70,7 +69,7 @@ function transformChildren(children: ReactNode, highlight?: string): ReactNode[]
       let m: RegExpExecArray | null;
       while ((m = re.exec(p)) !== null) {
         if (m.index + m[1].length > last) parts.push(p.slice(last, m.index + m[1].length));
-        const name = m[2].toLowerCase();
+        const name = normalizeName(m[2]);
         parts.push(<MentionLink key={`m-${idx}-${i}-${m.index}`} name={name} />);
         last = m.index + m[1].length + 1 + m[2].length;
       }
