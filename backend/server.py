@@ -7,121 +7,162 @@ load_dotenv(ROOT_DIR / ".env")
 import os
 import re
 import uuid
+import asyncio
+import hashlib
 import logging
-import bcrypt
-import jwt
+import secrets
 import httpx
-import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Literal
+from typing import List, Optional
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, Query, UploadFile, File, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse, FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import BaseModel, ConfigDict
+
+import google_api
+from google_api import GoogleAuthError, GoogleConfig, CALENDAR_SCOPE
 
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-JWT_ALGORITHM = "HS256"
-JWT_SECRET_KEY = "JWT_SECRET"
-ACCESS_TOKEN_MIN = 60 * 24  # 1 day
-REFRESH_TOKEN_DAYS = 7
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+if not os.environ.get("SECRET_KEY"):
+    raise RuntimeError("SECRET_KEY must be set (e.g. `openssl rand -hex 32`)")
+
+APP_URL = os.environ.get("APP_URL", "").rstrip("/")
+GOOGLE = GoogleConfig.from_env()
+
+SESSION_COOKIE = "inkwell_session"
+OAUTH_STATE_COOKIE = "inkwell_oauth_state"
+# Browsers cap cookie lifetime at 400 days; the session slides forward on use,
+# so an active user never has to sign in again.
+SESSION_DAYS = min(int(os.environ.get("SESSION_DAYS", "400")), 400)
+SESSION_RENEW_AFTER = timedelta(hours=12)
+COOKIE_SECURE = _env_bool("COOKIE_SECURE", True)
+COOKIE_SAMESITE = (os.environ.get("COOKIE_SAMESITE") or "lax").lower()
+if COOKIE_SAMESITE == "none":
+    COOKIE_SECURE = True
 
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
 
-def get_jwt_secret() -> str:
-    return os.environ[JWT_SECRET_KEY]
-
-
 # ---------------------------------------------------------------------------
-# Helpers
+# Session helpers (opaque random token in cookie, SHA-256 hash in DB)
 # ---------------------------------------------------------------------------
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def verify_password(plain: str, hashed: str) -> bool:
-    try:
-        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
-    except Exception:
-        return False
-
-
-def create_access_token(user_id: str, email: str) -> str:
-    payload = {
-        "sub": user_id,
-        "email": email,
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_MIN),
-        "type": "access",
-    }
-    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
-
-
-def create_refresh_token(user_id: str) -> str:
-    payload = {
-        "sub": user_id,
-        "exp": datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_DAYS),
-        "type": "refresh",
-    }
-    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
-
-
-def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
+def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
-        key="access_token",
-        value=access_token,
+        key=SESSION_COOKIE,
+        value=token,
         httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=ACCESS_TOKEN_MIN * 60,
-        path="/",
-    )
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=REFRESH_TOKEN_DAYS * 24 * 60 * 60,
+        secure=COOKIE_SECURE,
+        samesite=COOKIE_SAMESITE,
+        max_age=SESSION_DAYS * 24 * 60 * 60,
         path="/",
     )
 
 
-def clear_auth_cookies(response: Response):
-    for name in ("access_token", "refresh_token", "session_token"):
-        response.set_cookie(
-            key=name, value="", max_age=0,
-            httponly=True, secure=True, samesite="none", path="/",
+def _clear_auth_cookies(response: Response) -> None:
+    # Legacy cookie names are cleared too so old browsers end up clean.
+    for name in (SESSION_COOKIE, "access_token", "refresh_token", "session_token"):
+        response.delete_cookie(key=name, path="/", secure=COOKIE_SECURE, samesite=COOKIE_SAMESITE, httponly=True)
+
+
+async def create_session(user_id: str, request: Request) -> str:
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    await db.sessions.insert_one({
+        "token_hash": _hash_token(token),
+        "user_id": user_id,
+        "created_at": now,
+        "renewed_at": now,
+        "expires_at": now + timedelta(days=SESSION_DAYS),
+        "user_agent": (request.headers.get("User-Agent") or "")[:300],
+    })
+    return token
+
+
+def _aware(dt):
+    if isinstance(dt, datetime) and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+async def _user_from_session(request: Request, response: Optional[Response]) -> Optional[dict]:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        return None
+    sess = await db.sessions.find_one({"token_hash": _hash_token(token)})
+    if not sess:
+        return None
+    now = datetime.now(timezone.utc)
+    if _aware(sess["expires_at"]) < now:
+        return None
+    user = await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0, "password_hash": 0})
+    if not user:
+        return None
+    # Sliding expiration: push expiry forward (at most twice a day).
+    if response is not None and now - _aware(sess.get("renewed_at") or sess["created_at"]) > SESSION_RENEW_AFTER:
+        await db.sessions.update_one(
+            {"_id": sess["_id"]},
+            {"$set": {"renewed_at": now, "expires_at": now + timedelta(days=SESSION_DAYS)}},
         )
+        if request.cookies.get(SESSION_COOKIE):
+            _set_session_cookie(response, token)
+    return user
+
+
+async def get_current_user(request: Request, response: Response) -> dict:
+    user = await _user_from_session(request, response)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def _safe_next(next_path: Optional[str]) -> str:
+    if not next_path or not next_path.startswith("/") or next_path.startswith("//") or "\\" in next_path:
+        return "/"
+    return next_path
+
+
+def _app_redirect(path: str, **query) -> RedirectResponse:
+    q = {k: v for k, v in query.items() if v is not None}
+    url = f"{APP_URL}{path}"
+    if q:
+        url += ("&" if "?" in url else "?") + urlencode(q)
+    return RedirectResponse(url, status_code=302)
 
 
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
-class RegisterIn(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=6, max_length=128)
-    name: Optional[str] = None
-
-
-class LoginIn(BaseModel):
-    email: EmailStr
-    password: str
-
-
 class UserOut(BaseModel):
     model_config = ConfigDict(extra="ignore")
     user_id: str
-    email: EmailStr
+    email: str
     name: Optional[str] = None
     picture: Optional[str] = None
-    auth_provider: str = "email"
+    auth_provider: str = "google"
     created_at: datetime
 
 
@@ -189,92 +230,148 @@ api_router = APIRouter(prefix="/api")
 
 
 # ---------------------------------------------------------------------------
-# Auth dependency
+# Auth endpoints — Google is the only sign-in method
 # ---------------------------------------------------------------------------
-async def get_current_user(request: Request) -> dict:
-    token = request.cookies.get("access_token")
-    if not token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-    # Also support Emergent Google session_token cookie
-    session_token = request.cookies.get("session_token")
-
-    if token:
-        try:
-            payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
-            if payload.get("type") != "access":
-                raise HTTPException(status_code=401, detail="Invalid token type")
-            user = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0, "password_hash": 0})
-            if user:
-                return user
-        except jwt.ExpiredSignatureError:
-            pass
-        except jwt.InvalidTokenError:
-            pass
-
-    if session_token:
-        session = await db.user_sessions.find_one({"session_token": session_token}, {"_id": 0})
-        if session:
-            expires_at = session.get("expires_at")
-            if isinstance(expires_at, str):
-                expires_at = datetime.fromisoformat(expires_at)
-            if expires_at and expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if expires_at and expires_at >= datetime.now(timezone.utc):
-                user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0, "password_hash": 0})
-                if user:
-                    return user
-
-    raise HTTPException(status_code=401, detail="Not authenticated")
+@api_router.get("/auth/google/login")
+async def google_login(request: Request, next: str = "/", calendar: bool = False):
+    """Start Google sign-in. `calendar=1` additionally asks for Calendar access
+    (offline, so it is granted once and kept)."""
+    if not GOOGLE.configured:
+        raise HTTPException(status_code=500, detail="Google OAuth is not configured")
+    current = await _user_from_session(request, None)
+    mode = "connect" if (calendar and current) else "login"
+    state = secrets.token_urlsafe(32)
+    verifier, challenge = google_api.new_pkce_pair()
+    await db.oauth_states.insert_one({
+        "state": state,
+        "code_verifier": verifier,
+        "next": _safe_next(next),
+        "mode": mode,
+        "user_id": current["user_id"] if current else None,
+        "created_at": datetime.now(timezone.utc),
+    })
+    url = google_api.build_auth_url(
+        GOOGLE,
+        state=state,
+        code_challenge=challenge,
+        with_calendar=calendar,
+        login_hint=current["email"] if current else None,
+    )
+    resp = RedirectResponse(url, status_code=302)
+    resp.set_cookie(
+        key=OAUTH_STATE_COOKIE, value=state, max_age=15 * 60,
+        httponly=True, secure=COOKIE_SECURE, samesite="lax", path="/api/auth/google",
+    )
+    return resp
 
 
-# ---------------------------------------------------------------------------
-# Auth endpoints
-# ---------------------------------------------------------------------------
-@api_router.post("/auth/register", response_model=UserOut)
-async def register(data: RegisterIn, response: Response):
-    email = data.email.lower().strip()
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+async def _upsert_google_user(info: dict) -> str:
+    sub = info["sub"]
+    email = (info.get("email") or "").lower().strip()
+    now = datetime.now(timezone.utc)
+    profile = {"name": info.get("name") or email.split("@")[0], "picture": info.get("picture")}
+    user = await db.users.find_one({"google_sub": sub})
+    if not user:
+        # Link a pre-existing account (e.g. former e-mail/password user) by verified e-mail.
+        user = await db.users.find_one({"email": email})
+    if user:
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {
+                "$set": {**profile, "email": email, "google_sub": sub, "auth_provider": "google", "last_login_at": now},
+                "$unset": {"password_hash": ""},
+            },
+        )
+        return user["user_id"]
     user_id = f"user_{uuid.uuid4().hex[:12]}"
-    user_doc = {
+    await db.users.insert_one({
         "user_id": user_id,
         "email": email,
-        "name": data.name or email.split("@")[0],
-        "password_hash": hash_password(data.password),
-        "picture": None,
-        "auth_provider": "email",
-        "created_at": datetime.now(timezone.utc),
-    }
-    await db.users.insert_one(user_doc)
-    set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
-    user_doc.pop("password_hash", None)
-    user_doc.pop("_id", None)
-    return user_doc
+        "google_sub": sub,
+        "auth_provider": "google",
+        "created_at": now,
+        "last_login_at": now,
+        **profile,
+    })
+    return user_id
 
 
-@api_router.post("/auth/login", response_model=UserOut)
-async def login(data: LoginIn, response: Response):
-    email = data.email.lower().strip()
-    user = await db.users.find_one({"email": email})
-    if not user or not user.get("password_hash"):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    if not verify_password(data.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    set_auth_cookies(response, create_access_token(user["user_id"], email), create_refresh_token(user["user_id"]))
-    user.pop("password_hash", None)
-    user.pop("_id", None)
-    return user
+async def _store_google_tokens(user_id: str, tokens: dict) -> set:
+    granted = set((tokens.get("scope") or "").split())
+    existing = await db.google_credentials.find_one({"user_id": user_id})
+    now = datetime.now(timezone.utc)
+    refresh = tokens.get("refresh_token")
+    if refresh:
+        await db.google_credentials.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "refresh_token_enc": google_api.encrypt(refresh),
+                "scopes": sorted(granted),
+                "updated_at": now,
+            }, "$setOnInsert": {"created_at": now}},
+            upsert=True,
+        )
+        _access_cache.pop(user_id, None)
+    elif existing:
+        # No new refresh token (normal for repeat sign-ins): keep the stored one,
+        # but remember any newly granted scopes.
+        scopes = set(existing.get("scopes") or []) | granted
+        await db.google_credentials.update_one(
+            {"user_id": user_id}, {"$set": {"scopes": sorted(scopes), "updated_at": now}},
+        )
+    return granted
+
+
+@api_router.get("/auth/google/callback")
+async def google_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    rec = await db.oauth_states.find_one_and_delete({"state": state}) if state else None
+    if error:
+        target = rec["next"] if rec and rec.get("mode") == "connect" else "/login"
+        return _app_redirect(target, auth_error=error)
+    if not code or not state or not cookie_state or not secrets.compare_digest(state, cookie_state) or not rec:
+        return _app_redirect("/login", auth_error="invalid_state")
+    try:
+        tokens = await google_api.exchange_code(GOOGLE, code, rec["code_verifier"])
+        info = await google_api.fetch_userinfo(tokens["access_token"])
+    except (GoogleAuthError, httpx.HTTPError, KeyError) as e:
+        logging.warning("Google OAuth callback failed: %s", e)
+        return _app_redirect("/login", auth_error="google_failed")
+    if not info.get("sub") or not info.get("email") or not info.get("email_verified"):
+        return _app_redirect("/login", auth_error="email_not_verified")
+
+    if rec.get("mode") == "connect":
+        owner = await db.users.find_one({"user_id": rec["user_id"]})
+        if not owner or (owner.get("google_sub") and owner["google_sub"] != info["sub"]):
+            return _app_redirect(rec["next"], calendar="account_mismatch")
+
+    user_id = await _upsert_google_user(info)
+    granted = await _store_google_tokens(user_id, tokens)
+
+    query = {}
+    if rec.get("mode") == "connect" or CALENDAR_SCOPE in granted:
+        query["calendar"] = "connected" if CALENDAR_SCOPE in granted else "denied"
+    resp = _app_redirect(rec["next"], **query)
+
+    # (Re)issue a long-lived session unless the browser already has one for this user.
+    current = await _user_from_session(request, None)
+    if not current or current["user_id"] != user_id:
+        _set_session_cookie(resp, await create_session(user_id, request))
+    resp.delete_cookie(OAUTH_STATE_COOKIE, path="/api/auth/google")
+    return resp
 
 
 @api_router.post("/auth/logout")
-async def logout(response: Response, request: Request):
-    session_token = request.cookies.get("session_token")
-    if session_token:
-        await db.user_sessions.delete_one({"session_token": session_token})
-    clear_auth_cookies(response)
+async def logout(request: Request, response: Response):
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        await db.sessions.delete_one({"token_hash": _hash_token(token)})
+    _clear_auth_cookies(response)
     return {"ok": True}
 
 
@@ -283,66 +380,95 @@ async def me(user: dict = Depends(get_current_user)):
     return user
 
 
-@api_router.post("/auth/google/session", response_model=UserOut)
-async def google_session(request: Request, response: Response):
-    """Exchange Emergent session_id (sent as X-Session-ID header) for our session."""
-    session_id = request.headers.get("X-Session-ID")
-    if not session_id:
-        raise HTTPException(status_code=400, detail="X-Session-ID header required")
-    async with httpx.AsyncClient(timeout=15) as http:
-        r = await http.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id},
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid session_id")
-    data = r.json()
-    email = (data.get("email") or "").lower().strip()
-    if not email:
-        raise HTTPException(status_code=400, detail="No email returned")
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        user_id = existing["user_id"]
-        await db.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"name": data.get("name") or existing.get("name"), "picture": data.get("picture")}},
-        )
-    else:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        await db.users.insert_one(
-            {
-                "user_id": user_id,
-                "email": email,
-                "name": data.get("name") or email.split("@")[0],
-                "picture": data.get("picture"),
-                "auth_provider": "google",
-                "password_hash": None,
-                "created_at": datetime.now(timezone.utc),
-            }
-        )
+# ---------------------------------------------------------------------------
+# Google Calendar — access is granted once and kept via the stored refresh token
+# ---------------------------------------------------------------------------
+_access_cache: dict[str, tuple[str, float]] = {}
 
-    session_token = data.get("session_token") or f"sess_{uuid.uuid4().hex}"
-    expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_DAYS)
-    await db.user_sessions.insert_one(
-        {
-            "user_id": user_id,
-            "session_token": session_token,
-            "expires_at": expires_at,
-            "created_at": datetime.now(timezone.utc),
-        }
-    )
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=REFRESH_TOKEN_DAYS * 24 * 60 * 60,
-        path="/",
-    )
-    set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
-    return user
+
+async def _calendar_access_token(user_id: str) -> str:
+    creds = await db.google_credentials.find_one({"user_id": user_id})
+    if not creds or CALENDAR_SCOPE not in (creds.get("scopes") or []):
+        raise HTTPException(status_code=409, detail="calendar_not_connected")
+    now = datetime.now(timezone.utc).timestamp()
+    cached = _access_cache.get(user_id)
+    if cached and cached[1] - 60 > now:
+        return cached[0]
+    refresh = google_api.decrypt(creds.get("refresh_token_enc") or "")
+    if not refresh:
+        await db.google_credentials.delete_one({"user_id": user_id})
+        raise HTTPException(status_code=409, detail="calendar_not_connected")
+    try:
+        tok = await google_api.refresh_access_token(GOOGLE, refresh)
+    except GoogleAuthError as e:
+        if e.revoked:
+            # User revoked access in their Google account — forget the token.
+            await db.google_credentials.delete_one({"user_id": user_id})
+            raise HTTPException(status_code=409, detail="calendar_not_connected")
+        raise HTTPException(status_code=502, detail="Google token refresh failed")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Google token refresh failed")
+    if tok.get("scope") and CALENDAR_SCOPE not in tok["scope"].split():
+        await db.google_credentials.update_one(
+            {"user_id": user_id}, {"$set": {"scopes": sorted(set(tok["scope"].split()))}},
+        )
+        raise HTTPException(status_code=409, detail="calendar_not_connected")
+    _access_cache[user_id] = (tok["access_token"], now + int(tok.get("expires_in", 3600)))
+    return tok["access_token"]
+
+
+@api_router.get("/google/calendar/status")
+async def calendar_status(user: dict = Depends(get_current_user)):
+    creds = await db.google_credentials.find_one({"user_id": user["user_id"]}, {"_id": 0, "scopes": 1, "updated_at": 1})
+    connected = bool(creds and CALENDAR_SCOPE in (creds.get("scopes") or []))
+    return {"connected": connected, "connected_at": creds.get("updated_at") if connected else None}
+
+
+@api_router.get("/google/calendar/events")
+async def calendar_events(time_min: str, time_max: str, user: dict = Depends(get_current_user)):
+    """List events of the user's primary Google Calendar in [time_min, time_max) (RFC3339)."""
+    for v in (time_min, time_max):
+        try:
+            datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(400, "time_min/time_max must be RFC3339")
+    token = await _calendar_access_token(user["user_id"])
+    try:
+        items = await google_api.list_calendar_events(token, time_min, time_max)
+    except GoogleAuthError as e:
+        _access_cache.pop(user["user_id"], None)
+        if e.revoked:
+            raise HTTPException(status_code=409, detail="calendar_not_connected")
+        raise HTTPException(status_code=502, detail="Google Calendar error")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Google Calendar error")
+    out = []
+    for ev in items:
+        if ev.get("status") == "cancelled":
+            continue
+        start, end = ev.get("start") or {}, ev.get("end") or {}
+        out.append({
+            "id": ev.get("id"),
+            "summary": ev.get("summary") or "(başlıksız)",
+            "start": start.get("dateTime") or start.get("date"),
+            "end": end.get("dateTime") or end.get("date"),
+            "all_day": "date" in start and "dateTime" not in start,
+            "location": ev.get("location"),
+            "html_link": ev.get("htmlLink"),
+        })
+    return out
+
+
+@api_router.delete("/google/calendar")
+async def calendar_disconnect(user: dict = Depends(get_current_user)):
+    creds = await db.google_credentials.find_one({"user_id": user["user_id"]})
+    if creds:
+        refresh = google_api.decrypt(creds.get("refresh_token_enc") or "")
+        if refresh:
+            await google_api.revoke_token(refresh)
+        await db.google_credentials.delete_one({"user_id": user["user_id"]})
+    _access_cache.pop(user["user_id"], None)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -811,77 +937,58 @@ async def geocode(q: str, limit: int = 6, user: dict = Depends(get_current_user)
         raise HTTPException(status_code=502, detail="Geocoding upstream error")
 
 
-# ---- File uploads (Emergent object storage)
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-APP_NAME = "inkwell"
-
-_storage_key: Optional[str] = None
-
-
-def init_storage() -> str:
-    """Call once at startup; returns cached session-scoped storage_key."""
-    global _storage_key
-    if _storage_key:
-        return _storage_key
-    if not EMERGENT_KEY:
-        raise RuntimeError("EMERGENT_LLM_KEY not set")
-    resp = requests.post(
-        f"{STORAGE_URL}/init",
-        json={"emergent_key": EMERGENT_KEY},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    return _storage_key
+# ---- File uploads (local disk; mount a volume at UPLOAD_DIR in production)
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR") or (ROOT_DIR / "uploads")).resolve()
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+# SVG is deliberately excluded: it can carry script and would be served from our origin.
+ALLOWED_IMAGE_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/avif": "avif",
+}
 
 
-def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()
+def _resolve_upload(rel_path: str) -> Optional[Path]:
+    p = (UPLOAD_DIR / rel_path).resolve()
+    if UPLOAD_DIR not in p.parents:
+        return None
+    return p
 
 
-def get_object(path: str) -> tuple[bytes, str]:
-    key = init_storage()
-    resp = requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key}, timeout=60,
-    )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+def _write_file(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
 
 
 @api_router.post("/uploads/image")
 async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     content_type = (file.content_type or "").lower()
-    if not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Only images allowed")
-    contents = await file.read()
-    max_size = 10 * 1024 * 1024
-    if len(contents) > max_size:
+    ext = ALLOWED_IMAGE_TYPES.get(content_type)
+    if not ext:
+        raise HTTPException(status_code=400, detail="Only PNG, JPEG, GIF, WebP or AVIF images allowed")
+    contents = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Image too large (max 10 MB)")
-    ext = (file.filename or "img").split(".")[-1][:8] if "." in (file.filename or "") else "bin"
-    path = f"{APP_NAME}/uploads/{user['user_id']}/{uuid.uuid4().hex}.{ext}"
+    rel_path = f"{user['user_id']}/{uuid.uuid4().hex}.{ext}"
+    target = _resolve_upload(rel_path)
+    if target is None:
+        raise HTTPException(status_code=400, detail="Invalid path")
     try:
-        result = put_object(path, contents, content_type)
-    except Exception as e:
+        await asyncio.to_thread(_write_file, target, contents)
+    except OSError:
         logging.exception("Upload failed")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Upload failed")
     file_id = f"file_{uuid.uuid4().hex[:12]}"
     await db.files.insert_one({
         "file_id": file_id,
         "user_id": user["user_id"],
-        "storage_path": result["path"],
+        "storage": "local",
+        "storage_path": rel_path,
         "original_filename": file.filename,
         "content_type": content_type,
-        "size": result.get("size", len(contents)),
+        "size": len(contents),
         "is_deleted": False,
         "created_at": datetime.now(timezone.utc),
     })
@@ -891,14 +998,16 @@ async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_cu
 @api_router.get("/files/{file_id}")
 async def download_file(file_id: str, user: dict = Depends(get_current_user)):
     rec = await db.files.find_one({"file_id": file_id, "user_id": user["user_id"], "is_deleted": False})
-    if not rec:
+    if not rec or rec.get("storage") != "local":
         raise HTTPException(status_code=404, detail="File not found")
-    try:
-        data, ctype = get_object(rec["storage_path"])
-    except Exception as e:
-        logging.exception("File fetch failed")
-        raise HTTPException(status_code=500, detail=f"Fetch failed: {e}")
-    return Response(content=data, media_type=rec.get("content_type") or ctype)
+    path = _resolve_upload(rec["storage_path"])
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(
+        path,
+        media_type=rec.get("content_type") or "application/octet-stream",
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"},
+    )
 
 
 # ---- Link preview (OpenGraph)
@@ -999,39 +1108,23 @@ async def mark_reminder_fired(reminder_id: str, user: dict = Depends(get_current
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.users.create_index("user_id", unique=True)
+    await db.users.create_index("google_sub", unique=True, sparse=True)
     await db.notes.create_index([("user_id", 1), ("date", 1)])
     await db.notes.create_index("note_id", unique=True)
     await db.tags.create_index([("user_id", 1), ("name", 1)], unique=True)
     await db.people.create_index([("user_id", 1), ("name", 1)], unique=True)
     await db.locations.create_index("location_id", unique=True)
-    await db.user_sessions.create_index("session_token", unique=True)
+    await db.sessions.create_index("token_hash", unique=True)
+    await db.sessions.create_index("expires_at", expireAfterSeconds=0)
+    await db.oauth_states.create_index("state", unique=True)
+    await db.oauth_states.create_index("created_at", expireAfterSeconds=15 * 60)
+    await db.google_credentials.create_index("user_id", unique=True)
     await db.reminders.create_index([("user_id", 1), ("at", 1)])
     await db.reminders.create_index("reminder_id", unique=True)
     await db.files.create_index("file_id", unique=True)
-
-    # Init object storage session key (safe to fail — uploads will just error)
-    try:
-        init_storage()
-        logging.info("Storage initialized")
-    except Exception as e:
-        logging.warning("Storage init failed: %s", e)
-
-    # seed admin
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@inkwell.app").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin12345")
-    existing = await db.users.find_one({"email": admin_email})
-    if not existing:
-        await db.users.insert_one(
-            {
-                "user_id": f"user_{uuid.uuid4().hex[:12]}",
-                "email": admin_email,
-                "name": "Admin",
-                "password_hash": hash_password(admin_password),
-                "picture": None,
-                "auth_provider": "email",
-                "created_at": datetime.now(timezone.utc),
-            }
-        )
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    if not GOOGLE.configured:
+        logging.warning("GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / APP_URL not set — sign-in will not work")
 
 
 @app.on_event("shutdown")
@@ -1039,14 +1132,16 @@ async def shutdown():
     client.close()
 
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_origin_regex=".*",
-)
+# CORS — only needed when the frontend is served from a different origin.
+_cors_origins = [o.strip().rstrip("/") for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_origins=_cors_origins,
+    )
 
 app.include_router(api_router)
 

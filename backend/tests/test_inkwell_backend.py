@@ -1,46 +1,9 @@
 """Backend tests for Inkwell Notes API (auth, notes, tags, people, locations)."""
-import os
 import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://markdown-memo.preview.emergentagent.com").rstrip("/")
-API = f"{BASE_URL}/api"
-
-ADMIN = {"email": "admin@inkwell.app", "password": "admin12345"}
-TEST_USER = {"email": "test@inkwell.app", "password": "test12345"}
-
-
-def _new_session():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
-
-
-def _login(session, creds):
-    r = session.post(f"{API}/auth/login", json=creds)
-    return r
-
-
-@pytest.fixture(scope="module")
-def admin_session():
-    s = _new_session()
-    r = _login(s, ADMIN)
-    assert r.status_code == 200, f"Admin login failed: {r.status_code} {r.text}"
-    assert "access_token" in s.cookies
-    return s
-
-
-@pytest.fixture(scope="module")
-def user_session():
-    s = _new_session()
-    r = _login(s, TEST_USER)
-    if r.status_code != 200:
-        rr = s.post(f"{API}/auth/register", json={**TEST_USER, "name": "Test"})
-        assert rr.status_code in (200, 400)
-        r = _login(s, TEST_USER)
-    assert r.status_code == 200, f"Test user login failed: {r.text}"
-    return s
+from conftest import API, make_session
 
 
 # ---------------- Auth ----------------
@@ -50,44 +13,50 @@ class TestAuth:
         assert r.status_code == 200
         assert r.json().get("ok") is True
 
-    def test_register_creates_user_and_sets_cookies(self):
-        s = _new_session()
-        email = f"test_{uuid.uuid4().hex[:8]}@inkwell.app"
-        r = s.post(f"{API}/auth/register", json={"email": email, "password": "pass1234", "name": "T"})
-        assert r.status_code == 200, r.text
-        data = r.json()
-        assert data["email"] == email
-        assert "user_id" in data
-        assert "access_token" in s.cookies
-        assert "refresh_token" in s.cookies
-        # me works with cookies
+    def test_me_with_session(self):
+        email = f"test_{uuid.uuid4().hex[:8]}@inkwell.test"
+        s = make_session(email)
         rm = s.get(f"{API}/auth/me")
         assert rm.status_code == 200
         assert rm.json()["email"] == email
-        # logout clears
-        rl = s.post(f"{API}/auth/logout")
-        assert rl.status_code == 200
-        rm2 = requests.get(f"{API}/auth/me")  # no cookies
-        assert rm2.status_code == 401
 
-    def test_register_duplicate_returns_400(self):
-        s = _new_session()
-        r = s.post(f"{API}/auth/register", json={"email": ADMIN["email"], "password": "x" * 8})
-        assert r.status_code == 400
-
-    def test_login_admin_and_me(self, admin_session):
-        r = admin_session.get(f"{API}/auth/me")
-        assert r.status_code == 200
-        assert r.json()["email"] == ADMIN["email"]
-
-    def test_login_wrong_password(self):
-        s = _new_session()
-        r = s.post(f"{API}/auth/login", json={"email": ADMIN["email"], "password": "bad"})
+    def test_logout_invalidates_session(self):
+        s = make_session(f"test_{uuid.uuid4().hex[:8]}@inkwell.test")
+        token = s.cookies.get("inkwell_session")
+        assert s.post(f"{API}/auth/logout").status_code == 200
+        r = requests.get(f"{API}/auth/me", cookies={"inkwell_session": token})
         assert r.status_code == 401
+
+    def test_password_endpoints_removed(self):
+        r = requests.post(f"{API}/auth/login", json={"email": "a@b.c", "password": "x" * 8})
+        assert r.status_code in (404, 405)
+        r = requests.post(f"{API}/auth/register", json={"email": "a@b.c", "password": "x" * 8})
+        assert r.status_code in (404, 405)
+
+    def test_google_login_redirects_to_google(self):
+        r = requests.get(f"{API}/auth/google/login", allow_redirects=False)
+        if r.status_code == 500:
+            pytest.skip("Google OAuth not configured on this server")
+        assert r.status_code == 302
+        assert r.headers["location"].startswith("https://accounts.google.com/")
+        assert "inkwell_oauth_state" in r.cookies
+
+    def test_callback_rejects_bad_state(self):
+        r = requests.get(f"{API}/auth/google/callback", params={"code": "x", "state": "bogus"}, allow_redirects=False)
+        assert r.status_code == 302
+        assert "auth_error=invalid_state" in r.headers["location"]
 
     def test_unauthorized_returns_401(self):
         r = requests.get(f"{API}/notes")
         assert r.status_code == 401
+
+    def test_calendar_not_connected(self, user_session):
+        r = user_session.get(f"{API}/google/calendar/status")
+        assert r.status_code == 200
+        assert r.json()["connected"] is False
+        r = user_session.get(f"{API}/google/calendar/events",
+                             params={"time_min": "2026-01-01T00:00:00Z", "time_max": "2026-01-02T00:00:00Z"})
+        assert r.status_code == 409
 
 
 # ---------------- Notes / Tags / People extraction ----------------
@@ -228,20 +197,12 @@ class TestLocations:
 
 # ---------------- Cross-user isolation ----------------
 class TestIsolation:
-    def test_user_a_cannot_see_user_b_notes(self):
-        # admin creates a note
-        sa = _new_session()
-        assert _login(sa, ADMIN).status_code == 200
-        ra = sa.post(f"{API}/notes", json={"content": "admin private #adminonly"})
+    def test_user_a_cannot_see_user_b_notes(self, user_session, admin_session):
+        ra = admin_session.post(f"{API}/notes", json={"content": "other private #otheronly"})
         assert ra.status_code == 200
-        admin_note_id = ra.json()["note_id"]
+        other_note_id = ra.json()["note_id"]
 
-        # test user logs in
-        sb = _new_session()
-        if _login(sb, TEST_USER).status_code != 200:
-            sb.post(f"{API}/auth/register", json={**TEST_USER, "name": "T"})
-            _login(sb, TEST_USER)
-        rb = sb.get(f"{API}/notes/{admin_note_id}")
+        rb = user_session.get(f"{API}/notes/{other_note_id}")
         assert rb.status_code == 404
-        notes = sb.get(f"{API}/notes").json()
-        assert all(n["note_id"] != admin_note_id for n in notes)
+        notes = user_session.get(f"{API}/notes").json()
+        assert all(n["note_id"] != other_note_id for n in notes)

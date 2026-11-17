@@ -1,33 +1,27 @@
-# Web Framework & Server
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-python-multipart>=0.0.6
+# Web framework & server
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+python-multipart>=0.0.9
 
-# Veritabanı (MongoDB)
-motor>=3.3.0
-pymongo>=4.5.0
+# Database (MongoDB)
+motor>=3.4,<4.0
 
-# Veri Doğrulama & Ayarlar
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-email-validator>=2.2.0
+# Models
+pydantic>=2.6,<3.0
 
-# Kimlik Doğrulama & Güvenlik
-python-jose[cryptography]>=3.3.0
-pyjwt>=2.8.0
-cryptography>=42.0.0
-passlib[bcrypt]>=1.7.4
-bcrypt>=4.0.0,<4.1.0
+# Google OAuth / Calendar HTTP calls, refresh-token encryption
+httpx>=0.27,<1.0
+cryptography>=42.0
 
-# HTTP & Dış Servis Entegrasyonları
-httpx>=0.25.0
-requests>=2.31.0
-requests-oauthlib>=2.0.0
-boto3>=1.34.0
+# Link preview parsing
+beautifulsoup4>=4.12,<5.0
+lxml>=5.0
 
-# Veri İşleme & Yardımcı Araçlar
-pandas>=2.2.0
-numpy>=1.26.0
-python-dotenv>=1.0.0
+# Misc
+python-dotenv>=1.0
 tzdata>=2024.1
-typer>=0.9.0
+
+# Tests
+pytest>=8.0
+pymongo>=4.6
+requests>=2.31

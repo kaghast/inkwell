@@ -7,8 +7,7 @@ Backend tests for new Inkwell notes endpoint features:
 - PUT /api/notes/{id} with created_at ISO override
 
 Run:
-  pytest /app/backend/tests/test_notes_search_filters.py -v \
-    --junitxml=/app/test_reports/pytest/pytest_search_filters.xml
+  pytest backend/tests/test_notes_search_filters.py -v
 """
 import os
 import uuid
@@ -17,27 +16,7 @@ from datetime import datetime, timezone
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
-API = f"{BASE_URL}/api"
-
-TEST_USER = {"email": "test@inkwell.app", "password": "test12345"}
-
-
-# ---------- session / fixtures ----------
-def _login(session, creds):
-    return session.post(f"{API}/auth/login", json=creds)
-
-
-@pytest.fixture(scope="module")
-def user_session():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    r = _login(s, TEST_USER)
-    if r.status_code != 200:
-        s.post(f"{API}/auth/register", json={**TEST_USER, "name": "Test"})
-        r = _login(s, TEST_USER)
-    assert r.status_code == 200, f"Test user login failed: {r.text}"
-    return s
+from conftest import API
 
 
 @pytest.fixture(scope="module")
@@ -342,7 +321,7 @@ class TestRegressionExistingFlows:
     def test_auth_me_works(self, user_session):
         r = user_session.get(f"{API}/auth/me")
         assert r.status_code == 200
-        assert r.json()["email"] == TEST_USER["email"]
+        assert r.json()["email"] == "test@inkwell.test"
 
     def test_calendar_counts(self, user_session, seed_notes):
         today = datetime.now(timezone.utc).date()

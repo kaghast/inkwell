@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import api from "@/lib/api";
 import Sidebar from "@/components/Sidebar";
 import CalendarPanel from "@/components/CalendarPanel";
@@ -8,6 +8,7 @@ import NoteComposer from "@/components/NoteComposer";
 import TopBar from "@/components/TopBar";
 import SearchBar, { FilterChip } from "@/components/SearchBar";
 import PinnedNotesPanel from "@/components/PinnedNotesPanel";
+import GoogleCalendarPanel from "@/components/GoogleCalendarPanel";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Hash, AtSign, MapPin, Search } from "lucide-react";
 import { FilterProvider, FilterType } from "@/contexts/FilterContext";
@@ -34,6 +35,19 @@ interface Props {
 export default function Dashboard({ mode = "day" }: Props) {
   const params = useParams<{ date?: string; name?: string; id?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Result of the Google Calendar consent round-trip (?calendar=...).
+  useEffect(() => {
+    const sp = new URLSearchParams(location.search);
+    const cal = sp.get("calendar");
+    if (!cal && !sp.get("auth_error")) return;
+    if (cal === "connected") toast.success("Google Takvim bağlandı");
+    else if (cal === "denied") toast.error("Takvim izni verilmedi");
+    else if (cal === "account_mismatch") toast.error("Lütfen giriş yaptığınız Google hesabını seçin");
+    else if (sp.get("auth_error")) toast.error("Google izni alınamadı");
+    navigate(location.pathname, { replace: true });
+  }, [location.search, location.pathname, navigate]);
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -317,6 +331,7 @@ export default function Dashboard({ mode = "day" }: Props) {
 
           <div className="hidden lg:block border-l border-border min-h-0 overflow-y-auto">
             <PinnedNotesPanel reloadKey={refreshKey} />
+            <GoogleCalendarPanel date={selectedDate} />
             <CalendarPanel
               year={calMonth.year}
               month={calMonth.month}
@@ -336,6 +351,7 @@ export default function Dashboard({ mode = "day" }: Props) {
         <Sheet open={rightOpen} onOpenChange={setRightOpen}>
           <SheetContent side="right" className="w-[320px] p-0 bg-background border-border overflow-y-auto" data-testid="mobile-calendar">
             <PinnedNotesPanel reloadKey={refreshKey} />
+            <GoogleCalendarPanel date={selectedDate} />
             <CalendarPanel
               year={calMonth.year}
               month={calMonth.month}

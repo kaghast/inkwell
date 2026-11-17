@@ -57,6 +57,16 @@ export interface NoteInput {
 
 export type CalendarCounts = Record<string, number>;
 
+export interface GoogleEvent {
+  id: string;
+  summary: string;
+  start: string; // RFC3339 dateTime, or YYYY-MM-DD for all-day events
+  end: string;
+  all_day: boolean;
+  location?: string | null;
+  html_link?: string | null;
+}
+
 export type Theme = "light" | "dark";
 
 export type DashboardMode = "day" | "tag" | "person" | "location";

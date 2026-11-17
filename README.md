@@ -5,73 +5,95 @@ otomatik tamamlama, konum bilgisi (Leaflet harita), günlük takvim ve çoklu
 kullanıcı SaaS mimarisi ile.
 
 ## Özellikler
-- **Çift kimlik doğrulama**: JWT tabanlı e-posta/şifre **+** Emergent‑managed Google SSO.
+- **Yalnızca Google ile giriş** (OAuth 2.0 + PKCE, doğrudan Google — aracı servis yok).
+- **Kalıcı oturum**: bir kez giriş yapınca cihazda 400 güne kadar açık kalır; her
+  kullanımda süre ileri kayar, yani aktif kullanıcı tekrar giriş yapmaz.
+- **Google Takvim**: izin bir kez verilir; şifreli saklanan refresh token ile erişim
+  kalıcıdır (kullanıcı kaldırana ya da Google hesabından iptal edene kadar).
+  Seçili günün etkinlikleri sağ panelde listelenir.
 - **Markdown** destekli zengin notlar (`react-markdown` + GFM)
 - `#etiket` ve `@kişi` ile **autocomplete dropdown**; her etiket/kişi kendi URL'ine sahip.
-- **Konum**: Tarayıcının `geolocation` API'si üzerinden yakalama; Leaflet/OpenStreetMap
-  ile mini harita, haritaya tıklayarak değiştirme, isim verme.
+- **Konum**: Tarayıcının `geolocation` API'si; Leaflet/OpenStreetMap mini harita.
 - **3 sütunlu** masaüstü layout; mobilde sol/sağ paneller drawer/sheet'e dönüşür.
-- **Aylık takvim** günde kaç not olduğunu serif rakamlı badge ile gösterir.
-- Sidebar üzerinden etiket/kişi/konum **yeniden adlandırma → tüm notlardaki içerikte
-  ve referans alanlarda otomatik güncellenir**.
-- **Light / Dark** tema toggle, kâğıt+mürekkep estetiği.
+- **Aylık takvim** günde kaç not olduğunu badge ile gösterir.
+- Etiket/kişi/konum **yeniden adlandırma → tüm notlarda otomatik güncellenir**.
+- Görsel yükleme (yerel disk / Docker volume), hatırlatıcılar, link önizleme.
+- **Light / Dark** tema.
 
 ## Teknik yığın
-- **Backend**: FastAPI · Motor (MongoDB) · bcrypt · PyJWT · httpx
-- **Frontend**: React 19 · React Router 7 · Tailwind · shadcn/ui · react-markdown ·
-  react-leaflet · sonner · framer-motion
-- **DB**: MongoDB (motor async driver)
+- **Backend**: FastAPI · Motor (MongoDB) · httpx · cryptography
+- **Frontend**: React 19 · React Router 7 · Tailwind · shadcn/ui · react-markdown · react-leaflet
+- **DB**: MongoDB
 
-## Klasör yapısı
-```
-backend/      FastAPI uygulaması (server.py, Dockerfile)
-frontend/     React uygulaması (Dockerfile, nginx.conf)
-docker-compose.yml  Tek komutta Coolify/lokal kurulum
-memory/test_credentials.md  Seed admin + test kullanıcı
+## Google Cloud kurulumu (bir kez)
+1. [Google Cloud Console](https://console.cloud.google.com/) → yeni proje.
+2. **APIs & Services → Library** → *Google Calendar API*'yi etkinleştirin.
+3. **OAuth consent screen**: User type *External*; scope olarak `openid`, `email`,
+   `profile` ve `.../auth/calendar.readonly` ekleyin.
+4. **Publishing status → In production** yapın. ⚠️ *Testing* durumunda Google, refresh
+   token'ları **7 gün** sonra iptal eder; takvim erişimi kalıcı olmaz.
+   `calendar.readonly` hassas bir scope'tur: Google doğrulaması tamamlanana kadar
+   kullanıcılar "doğrulanmamış uygulama" uyarısı görür ve üst sınır 100 kullanıcıdır.
+5. **Credentials → Create credentials → OAuth client ID → Web application**.
+   *Authorized redirect URI*: `https://<APP_URL>/api/auth/google/callback`
+   (yerel geliştirme için ayrıca `http://localhost:3000/api/auth/google/callback`).
+6. Client ID ve secret'ı ortam değişkenlerine yazın.
+
+## Ortam değişkenleri
+Bkz. [`.env.example`](.env.example). Zorunlu olanlar:
+
+| Değişken | Açıklama |
+| -------- | -------- |
+| `SECRET_KEY` | `openssl rand -hex 32`. Refresh token şifrelemesinde kullanılır; değişirse kullanıcıların takvim bağlantısı düşer. |
+| `APP_URL` | Kullanıcının açtığı adres, örn. `https://notes.example.com` |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth client |
+
+## Docker / Coolify Deploy
+Frontend konteynerindeki nginx `/api` isteklerini backend'e yönlendirir; uygulama ve
+API **aynı alan adından** sunulur. Böylece oturum çerezi birinci taraf olur
+(`SameSite=Lax`) ve tarayıcıların üçüncü taraf çerez engellemesine takılmaz.
+
+1. Coolify'da "Docker Compose" uygulaması oluşturup repoyu bağlayın.
+2. Yukarıdaki ortam değişkenlerini tanımlayın.
+3. Yalnızca **frontend** servisini (port 80) domain ile yayınlayın. Backend ve Mongo
+   dahili kalır.
+4. Deploy.
+
+Yerelde:
+```bash
+cp .env.example .env   # değerleri doldurun
+docker compose up -d --build
 ```
 
 ## Geliştirme (yerel)
-Backend ve frontend mevcut Emergent ortamında supervisor ile çalışır.
-
-## Docker / Coolify Deploy
-1. Coolify'da yeni bir uygulama oluşturun, repo URL'sini bağlayın.
-2. "Docker Compose" deployment tipini seçin; `docker-compose.yml` algılanır.
-3. Coolify ortam değişkenlerinde aşağıdakileri tanımlayın:
-
-```
-JWT_SECRET=<64 karakter rasgele hex — `openssl rand -hex 32`>
-ADMIN_EMAIL=admin@inkwell.app
-ADMIN_PASSWORD=<güçlü bir şifre>
-DB_NAME=inkwell
-MONGO_URL=mongodb://mongo:27017
-REACT_APP_BACKEND_URL=https://<backend.domaininiz>
-CORS_ORIGINS=https://<frontend.domaininiz>
-```
-
-4. Backend servisini `8001` portunda public domain ile, frontend'i `80` portunda
-   public domain ile expose edin. Mongo'yu internal bırakın.
-5. Coolify "Deploy" butonuna basın.
-
-### Yerel docker compose
 ```bash
-cp .env.example .env  # gerekli değişkenleri doldurun
-docker compose up -d --build
+# backend/.env : MONGO_URL, DB_NAME, SECRET_KEY, GOOGLE_*, APP_URL=http://localhost:3000, COOKIE_SECURE=false
+cd backend && pip install -r requirements.txt && uvicorn server:app --port 8001 --reload
+cd frontend && yarn install && yarn start   # /api → localhost:8001 (src/setupProxy.js)
+```
+
+Testler çalışan bir API ve MongoDB'ye karşı koşar (oturumlar doğrudan DB'ye yazılır):
+```bash
+INKWELL_API_URL=http://localhost:8001 MONGO_URL=mongodb://localhost:27017 pytest backend/tests
 ```
 
 ## API
 Tüm endpointler `/api` altındadır.
 | Method | Endpoint | Açıklama |
 | ------ | -------- | ------ |
-| POST | `/api/auth/register` | E-posta+şifre kayıt |
-| POST | `/api/auth/login` | E-posta+şifre giriş |
-| POST | `/api/auth/google/session` | Emergent Google session_id exchange |
+| GET | `/api/auth/google/login?next=&calendar=` | Google'a yönlendirir (`calendar=true` takvim izni de ister) |
+| GET | `/api/auth/google/callback` | OAuth dönüşü; oturum çerezini kurar |
 | GET  | `/api/auth/me` | Mevcut kullanıcı |
-| POST | `/api/auth/logout` | Çıkış |
-| GET/POST/PUT/DELETE | `/api/notes` | Notlar CRUD + `?date=`, `?tag=`, `?person=`, `?location_id=` filtreleri |
+| POST | `/api/auth/logout` | Çıkış (takvim bağlantısı korunur) |
+| GET | `/api/google/calendar/status` | Takvim bağlı mı |
+| GET | `/api/google/calendar/events?time_min=&time_max=` | Birincil takvimdeki etkinlikler |
+| DELETE | `/api/google/calendar` | Takvim bağlantısını kaldır (token Google'da da iptal edilir) |
+| GET/POST/PUT/DELETE | `/api/notes` | Notlar CRUD + filtreler |
 | GET | `/api/notes/calendar?year=&month=` | Aylık gün başına not sayısı |
-| GET/PUT/DELETE | `/api/tags/:tag_id` | Etiket yönetimi (rename → notları güncelle) |
+| GET/PUT/DELETE | `/api/tags/:tag_id` | Etiket yönetimi |
 | GET/PUT/DELETE | `/api/people/:person_id` | Kişi yönetimi |
 | GET/POST/PUT/DELETE | `/api/locations` | Konum yönetimi |
+| POST | `/api/uploads/image` · GET `/api/files/:id` | Görsel yükleme / indirme |
 
 ## Lisans
 MIT

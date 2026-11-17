@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   mongo:
     image: mongo:7
@@ -18,23 +16,29 @@ services:
     environment:
       MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017}
       DB_NAME: ${DB_NAME:-inkwell}
-      JWT_SECRET: ${JWT_SECRET}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@inkwell.app}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-    ports:
-      - "8001:8001"
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      APP_URL: ${APP_URL:?APP_URL is required}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET is required}
+      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    volumes:
+      - inkwell_uploads:/data/uploads
+    # Not published: the frontend's nginx proxies /api to it (same origin).
 
   frontend:
     build:
       context: ./frontend
       args:
-        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL}
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-}
     restart: unless-stopped
     depends_on:
       - backend
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
 
 volumes:
   inkwell_mongo_data:
+  inkwell_uploads:

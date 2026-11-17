@@ -8,39 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://markdown-memo.preview.emergentagent.com").rstrip("/")
-API = f"{BASE_URL}/api"
-
-ADMIN = {"email": "admin@inkwell.app", "password": "admin12345"}
-TEST_USER = {"email": "test@inkwell.app", "password": "test12345"}
-
-
-def _new_session():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
-
-
-def _login_or_register(session, creds):
-    r = session.post(f"{API}/auth/login", json=creds)
-    if r.status_code != 200:
-        session.post(f"{API}/auth/register", json={**creds, "name": "Test"})
-        r = session.post(f"{API}/auth/login", json=creds)
-    assert r.status_code == 200, f"login failed: {r.text}"
-    return session
-
-
-@pytest.fixture(scope="module")
-def user_session():
-    return _login_or_register(_new_session(), TEST_USER)
-
-
-@pytest.fixture(scope="module")
-def admin_session():
-    s = _new_session()
-    r = s.post(f"{API}/auth/login", json=ADMIN)
-    assert r.status_code == 200, r.text
-    return s
+from conftest import API
 
 
 # tiny 1x1 png
@@ -249,6 +217,12 @@ class TestUploads:
         assert rd.status_code == 200
         assert rd.headers.get("content-type", "").startswith("image/png")
         assert rd.content == PNG_1PX
+
+    def test_upload_rejects_svg(self, user_session):
+        files = {"file": ("x.svg", b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>", "image/svg+xml")}
+        headers = {k: v for k, v in user_session.headers.items() if k.lower() != "content-type"}
+        r = requests.post(f"{API}/uploads/image", files=files, headers=headers, cookies=user_session.cookies)
+        assert r.status_code == 400
 
     def test_upload_rejects_non_image(self, user_session):
         files = {"file": ("note.txt", b"hello world", "text/plain")}

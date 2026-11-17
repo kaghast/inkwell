@@ -1,10 +1,9 @@
 import React from "react";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { Toaster } from "@/components/ui/sonner";
 import Login from "@/pages/Login";
-import AuthCallback from "@/pages/AuthCallback";
 import Dashboard from "@/pages/Dashboard";
 import NoteDetail from "@/pages/NoteDetail";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -18,10 +17,6 @@ function GlobalReminders() {
 }
 
 function AppRoutes() {
-  const location = useLocation();
-  if (location.hash && location.hash.includes("session_id=")) {
-    return <AuthCallback />;
-  }
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
