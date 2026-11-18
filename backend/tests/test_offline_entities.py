@@ -176,3 +176,26 @@ def test_migration_rebuilds_entities(client):
     note, tags = client.portal.call(seed)
     assert note["tags"] == ["istanbul"] and note["area_ids"] == []
     assert tags == ["istanbul"]
+
+
+# ---------------- split ----------------
+def test_split_note_into_two(client):
+    area = client.post("/api/areas", json={"name": "İş"}).json()
+    content = "Sabah #a @ali\n\nÖğle #b\n```reminder\n2030-01-01T10:00:00Z\nara\n```"
+    n = client.post("/api/notes", json={"title": "Gün", "content": content,
+                                        "date": "2026-11-18", "area_ids": [area["area_id"]]}).json()
+    # inside the reminder fence → rejected
+    assert client.post(f"/api/notes/{n['note_id']}/split", json={"at_line": 4}).status_code == 400
+    # empty side → rejected
+    assert client.post(f"/api/notes/{n['note_id']}/split", json={"at_line": 0}).status_code == 400
+    r = client.post(f"/api/notes/{n['note_id']}/split", json={"at_line": 2})
+    assert r.status_code == 200, r.text
+    first, second = r.json()
+    assert first["note_id"] == n["note_id"] and first["title"] == "Gün"
+    assert first["content"] == "Sabah #a @ali" and first["tags"] == ["a"] and first["people"] == ["ali"]
+    assert second["content"].startswith("Öğle #b") and second["tags"] == ["b"]
+    assert second["date"] == "2026-11-18" and second["area_ids"] == [area["area_id"]]
+    listed = [x["note_id"] for x in client.get("/api/notes").json()]
+    assert listed.index(first["note_id"]) + 1 == listed.index(second["note_id"])
+    rems = client.get("/api/reminders/upcoming", params={"within_hours": 24 * 365 * 10}).json()
+    assert {x["note_id"] for x in rems} == {second["note_id"]}

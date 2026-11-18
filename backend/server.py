@@ -769,6 +769,73 @@ async def toggle_pin(note_id: str, user: dict = Depends(get_current_user)):
     return note
 
 
+class SplitIn(BaseModel):
+    at_line: int  # content lines [0, at_line) stay; [at_line, ...) go to the new note
+
+
+def _fence_open_before(lines: List[str], at_line: int) -> bool:
+    """True if a ``` fence opened before `at_line` is still unclosed there."""
+    inside = False
+    for line in lines[:at_line]:
+        if line.strip().startswith("```"):
+            inside = not inside
+    return inside
+
+
+@api_router.post("/notes/{note_id}/split", response_model=List[NoteOut])
+async def split_note(note_id: str, payload: SplitIn, user: dict = Depends(get_current_user)):
+    """Cut a note in two at a line boundary. Returns [first_part, second_part]."""
+    user_id = user["user_id"]
+    note = await db.notes.find_one({"note_id": note_id, "user_id": user_id}, {"_id": 0})
+    if not note:
+        raise HTTPException(404, "Not found")
+    lines = (note.get("content") or "").replace("\r\n", "\n").split("\n")
+    at = payload.at_line
+    if at <= 0 or at >= len(lines):
+        raise HTTPException(400, "Geçersiz kesme noktası")
+    if _fence_open_before(lines, at):
+        raise HTTPException(400, "Kod/hatırlatma bloğunun içinden kesilemez")
+    first = "\n".join(lines[:at]).strip("\n")
+    second = "\n".join(lines[at:]).strip("\n")
+    if not first.strip() or not second.strip():
+        raise HTTPException(400, "Her iki parça da dolu olmalı")
+
+    now = datetime.now(timezone.utc)
+    await db.notes.update_one(
+        {"note_id": note_id, "user_id": user_id},
+        {"$set": {
+            "content": first,
+            "tags": extract_tags(first),
+            "people": extract_people(first),
+            "updated_at": now,
+        }},
+    )
+    created = _aware(note["created_at"])
+    new_id = f"note_{uuid.uuid4().hex[:12]}"
+    new_doc = {
+        "note_id": new_id,
+        "user_id": user_id,
+        "title": "",
+        "content": second,
+        "date": note["date"],
+        "tags": extract_tags(second),
+        "people": extract_people(second),
+        "area_ids": list(note.get("area_ids") or []),
+        "location_id": note.get("location_id"),
+        "pinned": False,
+        # one second earlier → listed right below the first part (newest-first order)
+        "created_at": created - timedelta(seconds=1),
+        "updated_at": now,
+    }
+    await db.notes.insert_one(new_doc)
+    await sync_entities(user_id)
+    await sync_reminders(user_id, note_id, first)
+    await sync_reminders(user_id, new_id, second)
+    new_doc.pop("_id", None)
+    updated = await db.notes.find_one({"note_id": note_id}, {"_id": 0})
+    return [updated, new_doc]
+
+
 @api_router.delete("/notes/{note_id}")
 async def delete_note(note_id: str, user: dict = Depends(get_current_user)):
     res = await db.notes.delete_one({"note_id": note_id, "user_id": user["user_id"]})

@@ -1,6 +1,10 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { MapPin, Calendar as CalIcon, Clock, Trash2, Save, X, Pin, PinOff, Shapes } from "lucide-react";
+import { MapPin, Calendar as CalIcon, Clock, Trash2, Save, X, Pin, PinOff, Shapes, MoreHorizontal, Scissors } from "lucide-react";
+import SplitNoteDialog from "@/components/SplitNoteDialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import MarkdownView, { toggleTaskInMarkdown } from "@/components/MarkdownView";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import LocationPicker from "@/components/LocationPicker";
@@ -58,6 +62,7 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const [timePopoverOpen, setTimePopoverOpen] = useState(false);
   const [locPickerOpen, setLocPickerOpen] = useState(false);
+  const [splitOpen, setSplitOpen] = useState(false);
 
   // time input value
   const createdDate = new Date(note.created_at);
@@ -297,6 +302,29 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                data-testid={`note-menu-${note.note_id}`}
+                aria-label="Diğer işlemler"
+                title="Diğer işlemler"
+              >
+                <MoreHorizontal className="w-3.5 h-3.5" strokeWidth={1.5} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="bg-popover border-border">
+              <DropdownMenuItem
+                disabled={editing}
+                onSelect={() => setSplitOpen(true)}
+                data-testid={`note-split-${note.note_id}`}
+              >
+                <Scissors className="w-3.5 h-3.5 mr-2" strokeWidth={1.5} /> Notu böl
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
@@ -349,6 +377,7 @@ export default function NoteCard({ note, locationMap, locations, onDelete, onCha
         initial={loc ? { name: loc.name, lat: loc.lat, lng: loc.lng } : undefined}
         onSave={onLocationSave}
       />
+      <SplitNoteDialog note={note} open={splitOpen} onOpenChange={setSplitOpen} onSplit={onChanged} />
     </article>
   );
 }
